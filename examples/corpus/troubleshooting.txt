@@ -1,0 +1,21 @@
+Troubleshooting Beacon
+
+SDK always returns the default value
+
+This usually means the SDK never finished initializing. Check that the SDK key belongs to the environment you expect: a staging key will not see flags that only exist in production. Also confirm that the flag is switched on for that environment and that the user object passed to variation() has a non-empty key.
+
+Error "401 invalid sdk key"
+
+The SDK key was revoked or copied incorrectly. Keys are rotated from Settings > Environments > Rotate key. After rotation, the old key keeps working for a 24-hour grace period so that you can redeploy without downtime.
+
+Flag changes take a long time to reach applications
+
+If streaming is blocked by a proxy or load balancer, SDKs silently fall back to polling every 30 seconds. Make sure your load balancer does not buffer responses and allows idle connections of at least 5 minutes; server-sent events need long-lived connections. For AWS Application Load Balancers, raise the idle timeout from its 60-second default.
+
+Database connection errors on startup
+
+beacon-server retries the database connection 10 times with exponential backoff before exiting. Confirm that BEACON_DATABASE_URL is reachable from the container and that the database user can create tables, because migrations run on first start.
+
+High memory usage in beacon-relay
+
+The relay keeps every flag rule for every environment it serves in memory. If you run many environments, create separate relay deployments per environment using the BEACON_RELAY_ENVIRONMENTS setting.

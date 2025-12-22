@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+  <title>Beacon REST API Reference</title>
+  <style>body { font-family: sans-serif; }</style>
+</head>
+<body>
+  <nav><a href="/">Home</a> | <a href="/docs">Docs</a></nav>
+  <main>
+    <h1>REST API Reference</h1>
+    <p>The Beacon REST API lets you manage flags, environments and segments programmatically. All endpoints live under <code>/api/v2</code> on beacon-server.</p>
+
+    <h2>Authentication</h2>
+    <p>Authenticate every request with a personal access token in the <code>Authorization</code> header, using the format <code>Authorization: Bearer &lt;token&gt;</code>. Tokens are created under Account &gt; Access tokens and can be scoped to read-only or read-write.</p>
+    <p>SDK keys cannot be used with the REST API; they only work for flag evaluation.</p>
+
+    <h2>Rate limits</h2>
+    <p>The REST API allows 300 requests per minute per access token. Requests beyond the limit receive HTTP 429 with a <code>Retry-After</code> header giving the number of seconds to wait. Flag evaluation by SDKs is not rate limited because it happens locally.</p>
+
+    <h2>Endpoints</h2>
+    <h3>List flags</h3>
+    <p><code>GET /api/v2/projects/{project}/flags</code> returns flags in pages of 50. Pass the <code>cursor</code> value from the previous response to fetch the next page.</p>
+    <h3>Toggle a flag</h3>
+    <p><code>PATCH /api/v2/projects/{project}/flags/{flag}/environments/{env}</code> with the body <code>{"on": true}</code> switches a flag on in one environment. Every change is recorded in the audit log with the token owner as the actor.</p>
+    <h3>Delete a flag</h3>
+    <p><code>DELETE /api/v2/projects/{project}/flags/{flag}</code> archives the flag. Archived flags can be restored for 30 days, after which they are permanently deleted.</p>
+  </main>
+  <footer>Copyright Quillstack (fictional)</footer>
+  <script>console.log("analytics");</script>
+</body>
+</html>
