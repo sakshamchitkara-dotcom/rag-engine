@@ -15,7 +15,8 @@ STOPWORDS = frozenset(
     once only or other our ours ourselves out over own same she should so some such than
     that the their theirs them themselves then there these they this those through to too
     under until up very was we were what when where which while who whom why will with
-    would you your yours yourself yourselves""".split()
+    would you your yours yourself yourselves
+    happen happens happened please tell know want need""".split()
 )
 
 
