@@ -22,20 +22,19 @@ def _open(args, embedder: str | None = None) -> Index:
 
 
 def cmd_ingest(args) -> int:
-    index = _open(args, None if args.reset else args.embedder)
-    if args.reset:
-        index.reset()
-        index.close()
-        index = _open(args, args.embedder)
     docs = []
     for target in args.paths:
         loaded = load_path(target)
         if not loaded:
             print(f"warning: no supported documents found in {target}", file=sys.stderr)
         docs.extend(loaded)
-    n = index.add_documents(docs, max_chars=args.chunk_size, overlap=args.overlap)
-    print(f"ingested {len(docs)} documents -> {n} chunks (embedder {index.embedder_name})")
-    print(f"index {index.path}: {len(index.chunks)} chunks from {len(index.sources())} documents")
+    if args.reset:
+        with _open(args) as index:
+            index.reset()
+    with _open(args, args.embedder) as index:
+        n = index.add_documents(docs, max_chars=args.chunk_size, overlap=args.overlap)
+        print(f"ingested {len(docs)} documents -> {n} chunks (embedder {index.embedder_name})")
+        print(f"index {index.path}: {len(index.chunks)} chunks from {len(index.sources())} documents")
     return 0
 
 
@@ -47,7 +46,11 @@ def _require_chunks(index: Index) -> bool:
 
 
 def cmd_ask(args) -> int:
-    index = _open(args)
+    with _open(args) as index:
+        return _ask(args, index)
+
+
+def _ask(args, index: Index) -> int:
     if not _require_chunks(index):
         return 1
     hits = index.search(args.question, k=args.k, mode=args.mode)
@@ -68,7 +71,11 @@ def cmd_ask(args) -> int:
 
 
 def cmd_eval(args) -> int:
-    index = _open(args)
+    with _open(args) as index:
+        return _eval(args, index)
+
+
+def _eval(args, index: Index) -> int:
     if not _require_chunks(index):
         return 1
     questions = load_questions(args.questions)
@@ -91,10 +98,10 @@ def cmd_eval(args) -> int:
 def cmd_serve(args) -> int:
     from .server import serve
 
-    index = _open(args)
-    if not _require_chunks(index):
-        return 1
-    serve(index, host=args.host, port=args.port, k=args.k)
+    with _open(args) as index:
+        if not _require_chunks(index):
+            return 1
+        serve(index, host=args.host, port=args.port, k=args.k)
     return 0
 
 
