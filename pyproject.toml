@@ -12,9 +12,9 @@ license = { text = "MIT" }
 dependencies = []
 
 [project.optional-dependencies]
-claude = ["anthropic>=0.70"]
+claude = ["anthropic>=1.0"]
 pdf = ["pypdf>=4"]
-all = ["anthropic>=0.70", "pypdf>=4"]
+all = ["anthropic>=1.0", "pypdf>=4"]
 
 [project.scripts]
 rag = "rag_engine.cli:main"
