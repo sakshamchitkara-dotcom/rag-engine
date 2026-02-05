@@ -58,6 +58,8 @@ def _ask(args, index: Index) -> int:
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))
         return 0
+    if result.warning:
+        print(f"warning: {result.warning}", file=sys.stderr, flush=True)
     print(result.text)
     cited = set(cited_numbers(result.text))
     print("\nSources:")
@@ -65,8 +67,6 @@ def _ask(args, index: Index) -> int:
         mark = "*" if s["n"] in cited else " "
         print(f" {mark}[{s['n']}] {s['source']} - {s['heading'] or s['title']}  (score {s['score']})")
     print(f"\n(answer mode: {result.mode}; * = cited)")
-    if result.warning:
-        print(f"warning: {result.warning}", file=sys.stderr)
     return 0
 
 
