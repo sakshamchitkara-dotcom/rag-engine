@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from rag_engine.cli import main
-from rag_engine.evaluate import evaluate, load_questions
+from rag_engine.evaluate import evaluate, evaluate_answers, load_questions
 from rag_engine.index import Index
 from rag_engine.server import make_handler
 
@@ -75,11 +75,26 @@ class EndToEndTest(unittest.TestCase):
         self.assertGreaterEqual(reports["hybrid"].recall_at(5), 0.9)
         self.assertGreaterEqual(reports["hybrid"].mrr, 0.7)
 
+    def test_answer_quality_floor(self):
+        index = Index(self.index_path)
+        report = evaluate_answers(index, load_questions(QUESTIONS))
+        index.close()
+        self.assertGreaterEqual(report.found_rate, 0.8)
+        self.assertGreaterEqual(report.precision, 0.5)
+
+    def test_eval_json_has_answer_metrics(self):
+        code, out = run("--index", self.index_path, "eval", "--questions", str(QUESTIONS), "--json")
+        self.assertEqual(code, 0)
+        result = json.loads(out)
+        self.assertEqual([r["mode"] for r in result["retrieval"]], ["hybrid", "bm25", "dense"])
+        self.assertEqual(set(result["answers"]), {"found", "precision", "avg_sentences", "misses"})
+
     def test_eval_cli(self):
         code, out = run("--index", self.index_path, "eval", "--questions", str(QUESTIONS))
         self.assertEqual(code, 0)
         self.assertIn("recall@5", out)
         self.assertIn("hybrid", out)
+        self.assertIn("Answer quality", out)
 
 
 class ServerTest(unittest.TestCase):
