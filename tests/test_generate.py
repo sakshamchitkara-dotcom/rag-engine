@@ -37,6 +37,29 @@ class ExtractiveTest(unittest.TestCase):
         text = generate.extractive_answer("docker run port", [hit("```\ndocker run -p 8420\n```\n\nUse docker run to start it.")])
         self.assertEqual(text, "Use docker run to start it. [1]")
 
+    def test_drops_loosely_related_sentences_from_other_chunks(self):
+        hits = [
+            hit("Every new workspace starts with a 14-day free trial. No credit card is required.", "Pricing > Free trial"),
+            hit("The self-hosted edition is free forever.", "Pricing"),
+        ]
+        text = generate.extractive_answer("How long is the free trial?", hits)
+        self.assertIn("14-day free trial", text)
+        self.assertNotIn("free forever", text)  # only shares the word "free"
+
+    def test_keeps_other_chunk_that_answers_another_part_of_the_question(self):
+        hits = [
+            hit("Keys are rotated from the settings page under environments.", "SDK keys > Rotation"),
+            hit("After a rotation the old key keeps working for a 24-hour grace period.", "SDK keys > Grace period"),
+        ]
+        text = generate.extractive_answer("How do I rotate a key and does the old key keep working?", hits)
+        self.assertIn("[1]", text)
+        self.assertIn("24-hour grace period. [2]", text)
+
+    def test_fragments_attach_to_the_previous_sentence(self):
+        hits = [hit("- `PORT` - HTTP port for the admin UI. Defaults to 8420.\n- `LOG_LEVEL` - log verbosity. Required.")]
+        text = generate.extractive_answer("What port does the server use by default?", hits)
+        self.assertEqual(text, "`PORT` - HTTP port for the admin UI. Defaults to 8420. [1]")
+
     def test_cited_numbers(self):
         self.assertEqual(generate.cited_numbers("a [2] b [1][2] c [3]"), [2, 1, 3])
 

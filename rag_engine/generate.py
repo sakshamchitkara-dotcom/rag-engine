@@ -17,6 +17,8 @@ from .index import Hit
 from .text import split_sentences, tokenize
 
 MODEL = "claude-opus-5-5"
+MIN_SENTENCE_TERMS = 3
+MIN_COVERAGE = 1 / 3  # share of query IDF weight a sentence from another chunk must match
 NO_ANSWER = "I couldn't find an answer to that in the indexed documents."
 
 SYSTEM_PROMPT = """You answer questions using only the numbered sources provided by the user.
@@ -63,6 +65,21 @@ def build_prompt(question: str, hits: list[Hit]) -> str:
     return "<sources>\n" + "\n".join(blocks) + f"\n</sources>\n\nQuestion: {question}"
 
 
+def _merge_fragments(sentences: list[str]) -> list[str]:
+    """Glue fragments such as "Defaults to 8420." or "Required." onto the sentence before.
+
+    Alone they win on length normalisation while saying nothing ("Required. [3]");
+    attached, "`BEACON_PORT` - HTTP port ... Defaults to 8420." reads as an answer.
+    """
+    out: list[str] = []
+    for sentence in sentences:
+        if out and len(tokenize(sentence)) < MIN_SENTENCE_TERMS:
+            out[-1] = f"{out[-1]} {sentence}"
+        else:
+            out.append(sentence)
+    return out
+
+
 def extractive_answer(question: str, hits: list[Hit], max_sentences: int = 3) -> str:
     """Pick the retrieved sentences that best cover the query terms, each with its citation."""
     q_terms = set(tokenize(question))
@@ -80,7 +97,7 @@ def extractive_answer(question: str, hits: list[Hit], max_sentences: int = 3) ->
             units = ([ln.lstrip("-* ").strip() for ln in lines]
                      if all(ln.lstrip().startswith(("- ", "* ")) for ln in lines) else [para])
             for unit in units:
-                for sentence in split_sentences(re.sub(r"\*\*|__", "", unit)):
+                for sentence in _merge_fragments(split_sentences(re.sub(r"\*\*|__", "", unit))):
                     candidates.append((sentence, n, set(tokenize(sentence)), heading))
     # IDF over the candidate sentences so rare query terms dominate common ones.
     total = len(candidates)
@@ -96,15 +113,26 @@ def extractive_answer(question: str, hits: list[Hit], max_sentences: int = 3) ->
     if not scored:
         return NO_ANSWER
     scored.sort(key=lambda s: (-s[0], s[1]))
+    query_weight = sum(idf.values())
     floor = scored[0][0] * 0.5  # drop sentences that only graze the query
-    picked, seen = [], set()
+    picked, seen, covered = [], set(), set()
     for score, i, sentence, n in scored:
         if score < floor:
             break
         key = sentence.lower()
+        toks = candidates[i][2]
         if key in seen:
             continue
+        # Padding guards: a follow-up sentence must come from the same chunk as the
+        # best one (it continues that passage), or match a third of the query's IDF
+        # weight and add a query term nothing picked so far covers. Stops "Beacon is
+        # free." riding along on the word "free" in a question about the free trial.
+        if picked and n != picked[0][2]:
+            coverage = sum(idf[t] for t in q_terms & toks) / query_weight
+            if coverage < MIN_COVERAGE or not (q_terms & toks) - covered:
+                continue
         seen.add(key)
+        covered |= q_terms & toks
         picked.append((i, sentence, n))
         if len(picked) == max_sentences:
             break
