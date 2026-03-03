@@ -12,6 +12,8 @@ from .bm25 import BM25
 from .chunking import Chunk, chunk_document
 from .embeddings import cosine, get_embedder
 from .loaders import Document
+from .rerank import POOL, RERANKERS, mmr, proximity_score
+from .text import tokenize
 
 DEFAULT_EMBEDDER = "hash:1024"
 RRF_K = 60
@@ -161,23 +163,46 @@ class Index:
         scored = [s for s in scored if s[1] > 0]
         return sorted(scored, key=lambda s: (-s[1], s[0]))[:n]
 
-    def search(self, query: str, k: int = 5, mode: str = "hybrid", candidates: int = 50) -> list[Hit]:
+    def _first_stage(self, query: str, n: int, mode: str) -> list[tuple[int, float, dict[str, int]]]:
+        if mode == "bm25":
+            return [(i, s, {"bm25": r}) for r, (i, s) in enumerate(self._bm25_ranking(query, n), 1)]
+        if mode == "dense":
+            return [(i, s, {"dense": r}) for r, (i, s) in enumerate(self._dense_ranking(query, n), 1)]
+        return rrf({
+            "bm25": [i for i, _ in self._bm25_ranking(query, max(n, 50))],
+            "dense": [i for i, _ in self._dense_ranking(query, max(n, 50))],
+        })[:n]
+
+    def _rerank(self, query: str, pool: list[tuple[int, float, dict[str, int]]], k: int,
+                rerank: str) -> list[tuple[int, float, dict[str, int]]]:
+        if rerank == "proximity":
+            q_terms = set(tokenize(query))
+            prox = {i: proximity_score(q_terms, tokenize(self._chunks[i].indexed_text), self._bm25.idf)
+                    for i, _, _ in pool}
+            by_prox = sorted(prox, key=lambda i: (-prox[i], i))
+            first = {i: ranks for i, _, ranks in pool}
+            fused = rrf({"first": [i for i, _, _ in pool], "proximity": by_prox})
+            return [(i, s, {**first[i], "proximity": r["proximity"]}) for i, s, r in fused[:k]]
+        top = pool[0][1] or 1.0
+        order = mmr([s / top for _, s, _ in pool],
+                    lambda a, b: cosine(self._vectors[pool[a][0]], self._vectors[pool[b][0]]), k)
+        return [(pool[p][0], pool[p][1], {**pool[p][2], "mmr": r}) for r, p in enumerate(order, 1)]
+
+    def search(self, query: str, k: int = 5, mode: str = "hybrid", rerank: str | None = None) -> list[Hit]:
+        """Top-k chunks for `query`; `rerank` reorders the first-stage top POOL candidates."""
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
+        if rerank not in (None, "none", *RERANKERS):
+            raise ValueError(f"rerank must be one of {('none', *RERANKERS)}")
         if not query.strip():
             return []
         self._load()
-        if mode == "bm25":
-            return [Hit(self._chunks[i], s, {"bm25": r}) for r, (i, s) in
-                    enumerate(self._bm25_ranking(query, k), 1)]
-        if mode == "dense":
-            return [Hit(self._chunks[i], s, {"dense": r}) for r, (i, s) in
-                    enumerate(self._dense_ranking(query, k), 1)]
-        fused = rrf({
-            "bm25": [i for i, _ in self._bm25_ranking(query, candidates)],
-            "dense": [i for i, _ in self._dense_ranking(query, candidates)],
-        })
-        return [Hit(self._chunks[i], score, ranks) for i, score, ranks in fused[:k]]
+        if rerank in (None, "none"):
+            results = self._first_stage(query, k, mode)
+        else:
+            pool = self._first_stage(query, max(k, POOL), mode)
+            results = self._rerank(query, pool, k, rerank) if pool else []
+        return [Hit(self._chunks[i], score, ranks) for i, score, ranks in results]
 
     def close(self) -> None:
         self.db.close()
