@@ -47,7 +47,7 @@ class EndToEndTest(unittest.TestCase):
 
     def test_ingest_reports_counts(self):
         _, out = run("--index", self.index_path, "ingest", str(CORPUS / "pricing.md"))
-        self.assertIn("ingested 1 documents", out)
+        self.assertIn("0 added, 0 updated, 1 unchanged -> 0 chunks written", out)
         self.assertIn("from 9 documents", out)  # re-ingest replaced, not duplicated
 
     def test_ask_json(self):

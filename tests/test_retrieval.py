@@ -78,7 +78,7 @@ class IndexTest(unittest.TestCase):
 
     def test_persists_and_searches_in_every_mode(self):
         ix = Index(self.path)
-        self.assertEqual(ix.add_documents(DOCS), 2)
+        self.assertEqual(ix.add_documents(DOCS).chunks, 2)
         ix.close()
         ix = Index(self.path)
         self.assertEqual(len(ix.chunks), 2)
@@ -95,6 +95,22 @@ class IndexTest(unittest.TestCase):
         ix.add_documents([Document("pets.md", "Pets", "# Pets\n\nParrots talk.\n\n## More\n\nFish swim.")])
         self.assertEqual(sorted(c.source for c in ix.chunks), ["limits.md", "pets.md", "pets.md"])
         self.assertEqual(ix.search("cats dogs", mode="bm25"), [])
+        ix.close()
+
+    def test_incremental_ingest_skips_unchanged_and_replaces_changed(self):
+        ix = Index(self.path)
+        first = ix.add_documents(DOCS)
+        self.assertEqual((len(first.added), first.chunks), (2, 2))
+        again = ix.add_documents(DOCS)
+        self.assertEqual((again.added, again.updated, again.chunks), ([], [], 0))
+        self.assertEqual(len(again.unchanged), 2)
+        edited = Document("limits.md", "Limits", "# Limits\n\nThe API allows 500 requests per minute.")
+        r = ix.add_documents([edited, DOCS[1]])
+        self.assertEqual((r.updated, r.chunks), (["limits.md"], 1))
+        self.assertIn("500 requests", ix.search("requests per minute", k=1)[0].chunk.text)
+        self.assertEqual(len(ix.chunks), 2)
+        rechunk = ix.add_documents([DOCS[1]], max_chars=400, overlap=50)  # new settings -> re-chunk
+        self.assertEqual(len(rechunk.updated), 1)
         ix.close()
 
     def test_embedder_is_pinned(self):
