@@ -63,6 +63,12 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn("14-day free trial", out)
         self.assertIn("*[1] pricing.md", out)
 
+    def test_ask_with_reranker(self):
+        code, out = run("--index", self.index_path, "ask", "What is the REST API rate limit?",
+                        "--rerank", "proximity", "--json")
+        self.assertEqual(code, 0)
+        self.assertIn("300 requests per minute", json.loads(out)["answer"])
+
     def test_ask_on_empty_index(self):
         code, _ = run("--index", str(Path(self.tmp.name) / "empty.sqlite"), "ask", "anything")
         self.assertEqual(code, 1)
@@ -154,11 +160,17 @@ class ServerTest(unittest.TestCase):
         self.assertIn("every 6 hours", body["answer"])
         self.assertEqual(len(body["sources"]), 3)
 
+    def test_ask_reranked(self):
+        status, body = self.post({"question": "How often are backups taken?", "rerank": "mmr", "llm": False})
+        self.assertEqual(status, 200)
+        self.assertIn("every 6 hours", body["answer"])
+
     def test_validation(self):
         self.assertEqual(self.post({"question": ""})[0], 400)
         self.assertEqual(self.post({"question": "x", "k": 0})[0], 400)
         self.assertEqual(self.post({"question": "x", "k": True})[0], 400)
         self.assertEqual(self.post({"question": "x", "mode": "magic"})[0], 400)
+        self.assertEqual(self.post({"question": "x", "rerank": "magic"})[0], 400)
         self.assertEqual(self.post(b"not json")[0], 400)
         self.assertEqual(self.post(["list"])[0], 400)
         self.assertEqual(self.post({"question": "x" * 3000})[0], 400)

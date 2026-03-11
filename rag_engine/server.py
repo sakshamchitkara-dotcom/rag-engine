@@ -2,7 +2,8 @@
 
     GET  /            chat page
     GET  /api/health  index stats
-    POST /api/ask     {"question": str, "k": int?, "mode": "hybrid"|"bm25"|"dense"?, "llm": bool?}
+    POST /api/ask     {"question": str, "k": int?, "mode": "hybrid"|"bm25"|"dense"?,
+                       "rerank": "none"|"proximity"|"mmr"?, "llm": bool?}
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .generate import answer, claude_available
 from .index import MODES, Index
+from .rerank import RERANKERS
 
 MAX_BODY = 64 * 1024
 MAX_QUESTION = 2000
@@ -141,6 +143,7 @@ def make_handler(index: Index, default_k: int = 5):
             question = req.get("question")
             k = req.get("k", default_k)
             mode = req.get("mode", "hybrid")
+            rerank = req.get("rerank", "none")
             use_llm = req.get("llm", True)
             if not isinstance(question, str) or not question.strip() or len(question) > MAX_QUESTION:
                 return self._json(400, {"error": f"'question' must be a non-empty string up to {MAX_QUESTION} chars"})
@@ -148,7 +151,9 @@ def make_handler(index: Index, default_k: int = 5):
                 return self._json(400, {"error": "'k' must be an integer between 1 and 20"})
             if mode not in MODES:
                 return self._json(400, {"error": f"'mode' must be one of {list(MODES)}"})
-            hits = index.search(question, k=k, mode=mode)
+            if rerank not in ("none", *RERANKERS):
+                return self._json(400, {"error": f"'rerank' must be one of {['none', *RERANKERS]}"})
+            hits = index.search(question, k=k, mode=mode, rerank=rerank)
             self._json(200, answer(question, hits, use_llm=bool(use_llm)).to_dict())
 
         def log_message(self, fmt, *args):  # quieter, single-line access log
