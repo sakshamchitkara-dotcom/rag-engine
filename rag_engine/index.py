@@ -66,6 +66,7 @@ class IngestResult:
     added: list[str] = field(default_factory=list)
     updated: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)  # gone from the origin since the last ingest
     chunks: int = 0  # chunks written (unchanged documents write none)
 
 
@@ -116,11 +117,13 @@ class Index:
         self._chunks, self._vectors, self._bm25 = None, [], None
 
     def add_documents(self, docs: list[Document], *, max_chars: int = 800, overlap: int = 150,
-                      origin: str = "") -> IngestResult:
+                      origin: str = "", prune: bool = False) -> IngestResult:
         """Chunk, embed and store documents whose content changed since the last ingest.
 
         A document is identified by its source; re-ingesting it with different text (or
-        chunking settings) replaces its chunks, and identical content is skipped.
+        chunking settings) replaces its chunks, and identical content is skipped. With
+        `prune`, documents previously ingested from the same `origin` (e.g. a folder)
+        that are not in `docs` any more are removed.
         """
         stored = dict(self.db.execute("SELECT source, hash FROM documents"))
         result, changed, hashes = IngestResult(), [], {}
@@ -157,8 +160,24 @@ class Index:
             )
         if changed:
             self._invalidate()
+        if prune and origin:
+            keep = {d.source for d in docs}
+            gone = [src for (src,) in self.db.execute("SELECT source FROM documents WHERE origin = ?", (origin,))
+                    if src not in keep]
+            result.removed = self.remove(gone)
         result.chunks = len(chunks)
         return result
+
+    def remove(self, sources: list[str]) -> list[str]:
+        """Delete these sources' chunks and records; returns the sources that existed."""
+        present = set(self.sources()) | {r[0] for r in self.db.execute("SELECT source FROM documents")}
+        found = [s for s in sources if s in present]
+        with self.db:
+            self.db.executemany("DELETE FROM chunks WHERE source = ?", [(s,) for s in found])
+            self.db.executemany("DELETE FROM documents WHERE source = ?", [(s,) for s in found])
+        if found:
+            self._invalidate()
+        return found
 
     def _load(self) -> None:
         with self._lock:

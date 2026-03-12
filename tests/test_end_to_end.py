@@ -47,8 +47,26 @@ class EndToEndTest(unittest.TestCase):
 
     def test_ingest_reports_counts(self):
         _, out = run("--index", self.index_path, "ingest", str(CORPUS / "pricing.md"))
-        self.assertIn("0 added, 0 updated, 1 unchanged -> 0 chunks written", out)
+        self.assertIn("0 added, 0 updated, 1 unchanged, 0 removed -> 0 chunks written", out)
         self.assertIn("from 9 documents", out)  # re-ingest replaced, not duplicated
+
+    def test_reingesting_a_folder_picks_up_edits_and_deletions(self):
+        index = str(Path(self.tmp.name) / "sync.sqlite")
+        folder = Path(self.tmp.name) / "docs"
+        folder.mkdir()
+        (folder / "a.md").write_text("# A\n\nAlpha rotates keys weekly.")
+        (folder / "b.md").write_text("# B\n\nBravo backs up hourly.")
+        run("--index", index, "ingest", str(folder))
+        (folder / "a.md").write_text("# A\n\nAlpha rotates keys daily.")
+        (folder / "b.md").unlink()
+        (folder / "c.md").write_text("# C\n\nCharlie caches responses.")
+        code, out = run("--index", index, "ingest", str(folder))
+        self.assertEqual(code, 0)
+        self.assertIn("1 added, 1 updated, 0 unchanged, 1 removed", out)
+        self.assertIn("removed b.md", out)
+        with Index(index) as ix:
+            self.assertEqual(ix.sources(), ["a.md", "c.md"])
+            self.assertIn("daily", ix.search("alpha keys", k=1)[0].chunk.text)
 
     def test_ask_json(self):
         code, out = run("--index", self.index_path, "ask", "What is the REST API rate limit?", "--json")
