@@ -168,6 +168,17 @@ class Index:
         result.chunks = len(chunks)
         return result
 
+    def find_sources(self, target: str, resolved: str | None = None) -> list[str]:
+        """Sources matching `target`: the source name itself, a folder prefix of source
+        names, or (via `resolved`, an absolute path or URL) the ingested file or folder."""
+        prefix = target.rstrip("/") + "/"
+        origins = dict(self.db.execute("SELECT source, origin FROM documents"))
+        return [
+            src for src in sorted(set(self.sources()) | set(origins))
+            if src == target or src.startswith(prefix)
+            or (resolved and resolved in (origins.get(src), f"{origins.get(src)}/{src}"))
+        ]
+
     def remove(self, sources: list[str]) -> list[str]:
         """Delete these sources' chunks and records; returns the sources that existed."""
         present = set(self.sources()) | {r[0] for r in self.db.execute("SELECT source FROM documents")}
