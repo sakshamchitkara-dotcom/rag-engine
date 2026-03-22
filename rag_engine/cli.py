@@ -1,4 +1,4 @@
-"""Command line interface: rag ingest | remove | ask | eval | serve."""
+"""Command line interface: rag ingest | remove | stats | ask | eval | serve."""
 
 from __future__ import annotations
 
@@ -60,6 +60,23 @@ def cmd_remove(args) -> int:
             print(f"removed {source}")
         print(f"index {index.path}: {len(index.chunks)} chunks from {len(index.sources())} documents")
     return 0 if removed else 1
+
+
+def cmd_stats(args) -> int:
+    with _open(args) as index:
+        st = index.stats()
+    if args.json:
+        print(json.dumps(st, indent=2))
+        return 0
+    print(f"index     {st['path']} ({st['bytes'] / 1024:.0f} KiB)")
+    print(f"embedder  {st['embedder']}")
+    print(f"contents  {st['chunks']} chunks from {st['documents']} documents")
+    if st["sources"]:
+        width = max(len(d["source"]) for d in st["sources"])
+        print(f"\n{'source'.ljust(width)}  chunks  chars   ingested (UTC)")
+        for d in st["sources"]:
+            print(f"{d['source'].ljust(width)}  {d['chunks']:>6}  {d['chars']:>6}  {d['ingested_at'] or '-'}")
+    return 0
 
 
 def _require_chunks(index: Index) -> bool:
@@ -154,6 +171,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("paths", nargs="+",
                    help="source name as shown by `rag stats`, a folder prefix, or an ingested file/folder path")
     s.set_defaults(func=cmd_remove)
+
+    s = sub.add_parser("stats", help="show what the index contains")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_stats)
 
     s = sub.add_parser("ask", help="answer a question with citations")
     s.add_argument("question")
