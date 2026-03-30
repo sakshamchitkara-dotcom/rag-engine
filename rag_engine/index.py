@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS documents (
     source TEXT PRIMARY KEY,
     origin TEXT NOT NULL,       -- the ingest target it came from (folder, file or URL)
     hash TEXT NOT NULL,         -- sha256 of chunking settings + text: unchanged docs are skipped
-    ingested_at TEXT NOT NULL
+    ingested_at TEXT NOT NULL,
+    tags TEXT NOT NULL DEFAULT ''  -- comma-separated, sorted
 );
 """
 
@@ -68,6 +69,14 @@ class IngestResult:
     unchanged: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)  # gone from the origin since the last ingest
     chunks: int = 0  # chunks written (unchanged documents write none)
+
+
+def normalize_tags(tags) -> str:
+    cleaned = sorted({t.strip().lower() for t in tags if t.strip()})
+    bad = [t for t in cleaned if "," in t]
+    if bad:
+        raise ValueError(f"tags cannot contain commas: {bad}")
+    return ",".join(cleaned)
 
 
 def content_hash(doc: Document, max_chars: int, overlap: int) -> str:
@@ -117,14 +126,16 @@ class Index:
         self._chunks, self._vectors, self._bm25 = None, [], None
 
     def add_documents(self, docs: list[Document], *, max_chars: int = 800, overlap: int = 150,
-                      origin: str = "", prune: bool = False) -> IngestResult:
+                      origin: str = "", prune: bool = False, tags: tuple[str, ...] = ()) -> IngestResult:
         """Chunk, embed and store documents whose content changed since the last ingest.
 
         A document is identified by its source; re-ingesting it with different text (or
-        chunking settings) replaces its chunks, and identical content is skipped. With
+        chunking settings) replaces its chunks, and identical content is skipped. `tags`
+        replace the tags of every document in `docs`, changed or not. With
         `prune`, documents previously ingested from the same `origin` (e.g. a folder)
         that are not in `docs` any more are removed.
         """
+        tag_text = normalize_tags(tags)
         stored = dict(self.db.execute("SELECT source, hash FROM documents"))
         result, changed, hashes = IngestResult(), [], {}
         for doc in docs:
@@ -155,9 +166,11 @@ class Index:
                 ],
             )
             self.db.executemany(
-                "INSERT OR REPLACE INTO documents(source, origin, hash, ingested_at) VALUES (?, ?, ?, ?)",
-                [(d.source, origin, hashes[d.source], now) for d in changed],
+                "INSERT OR REPLACE INTO documents(source, origin, hash, ingested_at, tags) VALUES (?, ?, ?, ?, ?)",
+                [(d.source, origin, hashes[d.source], now, tag_text) for d in changed],
             )
+            self.db.executemany("UPDATE documents SET tags = ? WHERE source = ?",
+                                [(tag_text, src) for src in result.unchanged])
         if changed:
             self._invalidate()
         if prune and origin:
@@ -223,11 +236,12 @@ class Index:
     def stats(self) -> dict:
         """Index-wide counts plus one row per document, for `rag stats` and /api/health."""
         rows = self.db.execute(
-            "SELECT c.source, COUNT(*), SUM(LENGTH(c.text)), d.origin, d.ingested_at "
+            "SELECT c.source, COUNT(*), SUM(LENGTH(c.text)), d.origin, d.ingested_at, d.tags "
             "FROM chunks c LEFT JOIN documents d ON d.source = c.source GROUP BY c.source ORDER BY c.source"
         ).fetchall()
-        docs = [{"source": src, "chunks": n, "chars": chars, "origin": origin, "ingested_at": at}
-                for src, n, chars, origin, at in rows]
+        docs = [{"source": src, "chunks": n, "chars": chars, "origin": origin, "ingested_at": at,
+                 "tags": tags.split(",") if tags else []}
+                for src, n, chars, origin, at, tags in rows]
         return {
             "path": str(self.path),
             "bytes": self.path.stat().st_size if self.path.exists() else 0,
