@@ -95,7 +95,10 @@ def cmd_ask(args) -> int:
 def _ask(args, index: Index) -> int:
     if not _require_chunks(index):
         return 1
-    hits = index.search(args.question, k=args.k, mode=args.mode, rerank=args.rerank)
+    hits = index.search(args.question, k=args.k, mode=args.mode, rerank=args.rerank,
+                        sources=args.source, tags=args.tag)
+    if not hits and (args.source or args.tag):
+        print("warning: no indexed chunks match the --source/--tag filters", file=sys.stderr)
     result = answer(args.question, hits, use_llm=not args.no_llm)
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))
@@ -185,6 +188,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--mode", choices=MODES, default="hybrid")
     s.add_argument("--rerank", choices=("none", *RERANKERS), default="none",
                    help="rerank the top 20 candidates: proximity (query terms close together) or mmr (diversity)")
+    s.add_argument("--source", action="append", default=[],
+                   help="only search documents whose source matches this glob, e.g. 'api-*' (repeatable: any)")
+    s.add_argument("--tag", action="append", default=[],
+                   help="only search documents with this ingest tag (repeatable: any)")
     s.add_argument("--no-llm", action="store_true", help="skip Claude; use the extractive answerer")
     s.add_argument("--json", action="store_true", help="print the full result as JSON")
     s.set_defaults(func=cmd_ask)
