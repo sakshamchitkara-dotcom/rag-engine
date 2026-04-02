@@ -215,12 +215,23 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("every 6 hours", body["answer"])
 
+    def test_ask_filtered(self):
+        status, body = self.post({"question": "How often are backups taken?", "llm": False,
+                                  "source": ["security.md", "pricing.*"]})
+        self.assertEqual(status, 200)
+        self.assertTrue(body["sources"])
+        self.assertLessEqual({s["source"] for s in body["sources"]}, {"security.md", "pricing.md"})
+        status, body = self.post({"question": "backups", "llm": False, "tag": "no-such-tag"})
+        self.assertEqual((status, body["sources"]), (200, []))
+
     def test_validation(self):
         self.assertEqual(self.post({"question": ""})[0], 400)
         self.assertEqual(self.post({"question": "x", "k": 0})[0], 400)
         self.assertEqual(self.post({"question": "x", "k": True})[0], 400)
         self.assertEqual(self.post({"question": "x", "mode": "magic"})[0], 400)
         self.assertEqual(self.post({"question": "x", "rerank": "magic"})[0], 400)
+        self.assertEqual(self.post({"question": "x", "source": 3})[0], 400)
+        self.assertEqual(self.post({"question": "x", "tag": [""]})[0], 400)
         self.assertEqual(self.post(b"not json")[0], 400)
         self.assertEqual(self.post(["list"])[0], 400)
         self.assertEqual(self.post({"question": "x" * 3000})[0], 400)
