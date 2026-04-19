@@ -5,6 +5,7 @@
     POST /api/ask     {"question": str, "k": int?, "mode": "hybrid"|"bm25"|"dense"?,
                        "rerank": "none"|"proximity"|"mmr"?, "llm": bool?,
                        "source": glob | [glob]?, "tag": str | [str]?}
+    POST /api/ask/stream  same body; Server-Sent Events: sources, delta..., [replace], done
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .generate import answer, claude_available
+from .generate import answer, claude_available, stream_answer
 from .index import MODES, Index
 from .rerank import RERANKERS
 
@@ -156,8 +157,29 @@ def make_handler(index: Index, default_k: int = 5):
             else:
                 self._json(404, {"error": "not found"})
 
+        def _sse(self, events) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")  # let reverse proxies pass events through
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            try:
+                try:
+                    for name, data in events:
+                        self.wfile.write(f"event: {name}\ndata: {json.dumps(data)}\n\n".encode())
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    raise
+                except Exception as exc:  # headers are sent: report in-band, not as a 500
+                    self.log_error("stream failed: %r", exc)
+                    self.wfile.write(f"event: error\ndata: {json.dumps({'error': 'internal error'})}\n\n".encode())
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # client went away mid-answer
+            self.close_connection = True
+
         def do_POST(self):
-            if self.path != "/api/ask":
+            if self.path not in ("/api/ask", "/api/ask/stream"):
                 return self._json(404, {"error": "not found"})
             try:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -176,6 +198,8 @@ def make_handler(index: Index, default_k: int = 5):
                 return self._json(400, {"error": params})
             hits = index.search(params["question"], k=params["k"], mode=params["mode"], rerank=params["rerank"],
                                 sources=params["sources"], tags=params["tags"])
+            if self.path == "/api/ask/stream":
+                return self._sse(stream_answer(params["question"], hits, use_llm=params["llm"]))
             self._json(200, answer(params["question"], hits, use_llm=params["llm"]).to_dict())
 
         def log_message(self, fmt, *args):  # quieter, single-line access log
