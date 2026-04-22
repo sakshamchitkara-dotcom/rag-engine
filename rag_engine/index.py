@@ -128,16 +128,18 @@ class Index:
         self._chunks, self._vectors, self._bm25 = None, [], None
 
     def add_documents(self, docs: list[Document], *, max_chars: int = 800, overlap: int = 150,
-                      origin: str = "", prune: bool = False, tags: tuple[str, ...] = ()) -> IngestResult:
+                      origin: str = "", prune: bool = False, tags: tuple[str, ...] | None = None) -> IngestResult:
         """Chunk, embed and store documents whose content changed since the last ingest.
 
         A document is identified by its source; re-ingesting it with different text (or
         chunking settings) replaces its chunks, and identical content is skipped. `tags`
-        replace the tags of every document in `docs`, changed or not. With
+        replace the tags of every document in `docs`, changed or not; None keeps the
+        tags documents already have. With
         `prune`, documents previously ingested from the same `origin` (e.g. a folder)
         that are not in `docs` any more are removed.
         """
-        tag_text = normalize_tags(tags)
+        tag_text = None if tags is None else normalize_tags(tags)
+        kept_tags = dict(self.db.execute("SELECT source, tags FROM documents"))
         stored = dict(self.db.execute("SELECT source, hash FROM documents"))
         result, changed, hashes = IngestResult(), [], {}
         for doc in docs:
@@ -169,10 +171,11 @@ class Index:
             )
             self.db.executemany(
                 "INSERT OR REPLACE INTO documents(source, origin, hash, ingested_at, tags) VALUES (?, ?, ?, ?, ?)",
-                [(d.source, origin, hashes[d.source], now, tag_text) for d in changed],
+                [(d.source, origin, hashes[d.source], now,
+                  kept_tags.get(d.source, "") if tag_text is None else tag_text) for d in changed],
             )
             self.db.executemany("UPDATE documents SET tags = ? WHERE source = ?",
-                                [(tag_text, src) for src in result.unchanged])
+                                [(tag_text, src) for src in result.unchanged if tag_text is not None])
         if docs:
             self._invalidate()  # chunks or tags changed
         if prune and origin:

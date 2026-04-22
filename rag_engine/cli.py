@@ -40,7 +40,7 @@ def cmd_ingest(args) -> int:
     with _open(args, args.embedder) as index:
         for target, docs in batches:
             r = index.add_documents(docs, max_chars=args.chunk_size, overlap=args.overlap,
-                                    origin=_origin(target), prune=Path(target).is_dir(), tags=tuple(args.tag))
+                                    origin=_origin(target), prune=Path(target).is_dir(), tags=tuple(args.tag) if args.tag else None)
             print(f"{target}: {len(r.added)} added, {len(r.updated)} updated, {len(r.unchanged)} unchanged, "
                   f"{len(r.removed)} removed -> {r.chunks} chunks written (embedder {index.embedder_name})")
             for source in r.removed:
@@ -167,7 +167,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("paths", nargs="+", help="file, folder or http(s) URL")
     s.add_argument("--reset", action="store_true", help="clear the index first")
     s.add_argument("--tag", action="append", default=[],
-                   help="tag the ingested documents (repeatable); filter with `rag ask --tag`")
+                   help="tag the ingested documents (repeatable), replacing their tags; without --tag "
+                        "existing tags are kept. Filter with `rag ask --tag`")
     s.add_argument("--embedder", default=None, help="'hash[:dim]' (default hash:1024) or 'st:<model>'")
     s.add_argument("--chunk-size", type=int, default=800, help="max characters per chunk (default 800)")
     s.add_argument("--overlap", type=int, default=150, help="overlap characters between chunks (default 150)")
