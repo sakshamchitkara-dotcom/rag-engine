@@ -26,8 +26,15 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: CLI smoke test (offline, extractive answers)
         run: |
-          rag ingest examples/corpus --reset
+          rag ingest examples/corpus --reset --tag beacon
+          rag ingest examples/corpus | tee ingest.log
+          grep -q "0 added, 0 updated, 9 unchanged, 0 removed" ingest.log
           rag ask "What is the REST API rate limit?"
+          rag ask "What is the REST API rate limit?" --rerank proximity --source 'api-*' --tag beacon | tee ask.log
+          grep -q "300 requests per minute" ask.log
+          rag remove pricing.md
+          rag stats | tee stats.log
+          grep -q "from 8 documents" stats.log
           rag eval
 
   pdf:
