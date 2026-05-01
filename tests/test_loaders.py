@@ -31,6 +31,19 @@ class HTMLTest(unittest.TestCase):
             self.assertNotIn(junk, text)
 
 
+    def test_tables_become_markdown_tables(self):
+        _, text = html_to_text(
+            "<h2>Plans</h2><table><caption>Hosted plans</caption>"
+            "<thead><tr><th>Plan</th><th>Price</th></tr></thead>"
+            "<tbody><tr><td>Team<br>plan</td><td>$25 | seat</td></tr><tr><td>Free</td></tr></tbody>"
+            "</table><p>After the table.</p>"
+        )
+        self.assertIn(
+            "Hosted plans\n\n| Plan | Price |\n|---|---|\n| Team plan | $25 \\| seat |\n| Free |  |\n\nAfter the table.",
+            text,
+        )
+
+
 class TextTest(unittest.TestCase):
     def test_promotes_standalone_short_lines(self):
         md = text_to_markdown("Guide\n\nIntro text here.\n\nSection two\n\nBody. More body.")

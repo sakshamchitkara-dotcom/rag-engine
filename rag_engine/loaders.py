@@ -26,8 +26,9 @@ class _HTMLToMarkdown(HTMLParser):
     """Keep headings (as '#' lines) and block structure; drop scripts, styles and nav chrome."""
 
     _SKIP = {"script", "style", "noscript", "template", "svg", "nav", "footer", "head"}
-    _BLOCK = {"p", "div", "section", "article", "li", "tr", "br", "pre", "blockquote",
-              "table", "ul", "ol", "dd", "dt", "main", "header"}
+    _BLOCK = {"p", "div", "section", "article", "li", "br", "pre", "blockquote",
+              "ul", "ol", "dd", "dt", "main", "header"}
+    _TABLE = {"table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col"}
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -36,12 +37,28 @@ class _HTMLToMarkdown(HTMLParser):
         self._skip_depth = 0
         self._in_title = False
         self._in_pre = False
+        # ponytail: one table level; a table nested in a cell is flattened into that cell.
+        self._rows: list[list[str]] | None = None  # rows of the open <table>
+        self._cell: list[str] | None = None  # text of the open <td>/<th>
 
     def handle_starttag(self, tag, attrs):
         if tag == "title":
             self._in_title = True
         if tag in self._SKIP:
             self._skip_depth += 1
+        elif self._skip_depth:
+            return
+        elif self._rows is not None:
+            if tag == "tr":
+                self._rows.append([])
+            elif tag in {"td", "th", "caption"}:
+                if not self._rows and tag != "caption":
+                    self._rows.append([])
+                self._cell = []
+            elif self._cell is not None:
+                self._cell.append(" ")  # <br>, <p> etc. inside a cell
+        elif tag == "table":
+            self._rows = []
         elif tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
             self.parts.append("\n\n" + "#" * int(tag[1]) + " ")
         elif tag in self._BLOCK:
@@ -57,6 +74,20 @@ class _HTMLToMarkdown(HTMLParser):
             self._in_title = False
         if tag in self._SKIP:
             self._skip_depth = max(0, self._skip_depth - 1)
+        elif self._skip_depth:
+            return
+        elif self._rows is not None:
+            if tag == "caption" and self._cell is not None:
+                self.parts.append("\n\n" + " ".join("".join(self._cell).split()) + "\n\n")
+                self._cell = None
+            elif tag in {"td", "th"} and self._cell is not None:
+                self._rows[-1].append(" ".join("".join(self._cell).split()).replace("|", "\\|"))
+                self._cell = None
+            elif tag == "table":
+                self.parts.append("\n\n" + _markdown_table(self._rows) + "\n\n")
+                self._rows = self._cell = None
+            elif self._cell is not None:
+                self._cell.append(" ")
         elif tag in {"h1", "h2", "h3", "h4", "h5", "h6"} or tag in self._BLOCK:
             self.parts.append("\n\n")
             if tag == "pre":
@@ -69,6 +100,10 @@ class _HTMLToMarkdown(HTMLParser):
             return
         if self._skip_depth:
             return
+        if self._rows is not None:
+            if self._cell is not None:
+                self._cell.append(data)
+            return  # whitespace between cells
         self.parts.append(data if self._in_pre else re.sub(r"\s+", " ", data))
 
     def markdown(self) -> str:
@@ -82,6 +117,17 @@ class _HTMLToMarkdown(HTMLParser):
             if line or (out and out[-1]):
                 out.append(line)
         return "\n".join(out).strip()
+
+
+def _markdown_table(rows: list[list[str]]) -> str:
+    """Render rows as a Markdown pipe table; the first row is the header."""
+    rows = [r for r in rows if any(r)]
+    if not rows:
+        return ""
+    width = max(len(r) for r in rows)
+    lines = ["| " + " | ".join(r + [""] * (width - len(r))) + " |" for r in rows]
+    lines.insert(1, "|" + "---|" * width)
+    return "\n".join(lines)
 
 
 def html_to_text(html: str) -> tuple[str, str]:
