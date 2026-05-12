@@ -55,6 +55,13 @@ class ExtractiveTest(unittest.TestCase):
         self.assertIn("[1]", text)
         self.assertIn("24-hour grace period. [2]", text)
 
+    def test_answers_from_the_matching_table_row(self):
+        table = ("| Plan | Price | Seats |\n|---|---|---|\n| Community | Free | Unlimited |\n"
+                 "| Team | $25 per seat | Up to 50 |\n| Enterprise | Custom | Unlimited |")
+        text = generate.extractive_answer("How many seats does the Team plan allow?",
+                                          [hit("Plans are listed below.\n\n" + table, "Pricing > Plans")])
+        self.assertEqual(text, "Plan: Team; Price: $25 per seat; Seats: Up to 50 [1]")
+
     def test_fragments_attach_to_the_previous_sentence(self):
         hits = [hit("- `PORT` - HTTP port for the admin UI. Defaults to 8420.\n- `LOG_LEVEL` - log verbosity. Required.")]
         text = generate.extractive_answer("What port does the server use by default?", hits)

@@ -14,6 +14,7 @@
   {"question": "How can my app keep working when the flag server is unreachable at startup?", "source": "sdk-guide.md", "contains": "bootstrap"},
   {"question": "How often are evaluation events flushed by the SDK?", "source": "sdk-guide.md", "contains": "every 10 seconds"},
   {"question": "How much does the Team plan cost?", "source": "pricing.md", "contains": "$25 per seat"},
+  {"question": "How many seats does the Team plan allow?", "source": "pricing.md", "contains": "Up to 50"},
   {"question": "What discount do I get for paying annually?", "source": "pricing.md", "contains": "20% discount"},
   {"question": "How long is the free trial?", "source": "pricing.md", "contains": "14-day free trial"},
   {"question": "What uptime SLA does Enterprise have?", "source": "pricing.md", "contains": "99.95%"},
