@@ -74,6 +74,18 @@ class ChunkTest(unittest.TestCase):
             self.assertLessEqual(len(c.text), 300)
         self.assertEqual(seen, rows)  # every row once, whole, in order: no sentence overlap
 
+    def test_long_code_blocks_split_between_lines_and_stay_fenced(self):
+        code = [f"    call_step({i})  # step {i}" for i in range(30)]
+        chunks = chunk_document("# T\n\n```python\n" + "\n".join(code) + "\n```", source="t.py", title="T",
+                                max_chars=300, overlap=50)
+        self.assertGreater(len(chunks), 2)
+        seen = []
+        for c in chunks:
+            lines = c.text.splitlines()
+            self.assertEqual((lines[0], lines[-1]), ("```python", "```"))
+            seen += lines[1:-1]
+        self.assertEqual(seen, code)  # indentation and line breaks survive
+
     def test_overlap_must_be_smaller_than_chunk(self):
         with self.assertRaises(ValueError):
             chunk_document("x", source="x", title="x", max_chars=100, overlap=100)
