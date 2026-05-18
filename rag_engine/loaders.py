@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 import sys
 import urllib.parse
@@ -144,6 +145,7 @@ def pdf_to_text(data: bytes) -> str | None:
         from pypdf import PdfReader
     except ImportError:
         return None
+    logging.getLogger("pypdf").setLevel(logging.ERROR)  # a broken PDF is reported once, by load_path
     reader = PdfReader(io.BytesIO(data))
     pages = [(page.extract_text() or "").strip() for page in reader.pages]
     return "\n\n".join(p for p in pages if p)
@@ -233,7 +235,11 @@ def load_path(target: str) -> list[Document]:
         base = path
     docs = []
     for f in files:
-        doc = load_file(f, source=f.relative_to(base).as_posix())
+        try:
+            doc = load_file(f, source=f.relative_to(base).as_posix())
+        except Exception as exc:  # a corrupt PDF or unreadable file must not abort the whole ingest
+            print(f"skip {f}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            continue
         if doc and doc.text.strip():
             docs.append(doc)
     return docs
