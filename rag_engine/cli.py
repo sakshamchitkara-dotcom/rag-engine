@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
+import urllib.error
 from pathlib import Path
 
 from . import __version__
@@ -218,9 +220,15 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (FileNotFoundError, ValueError) as exc:
+    except urllib.error.HTTPError as exc:
+        print(f"error: {exc.url}: HTTP {exc.code} {exc.reason}", file=sys.stderr)
+    except urllib.error.URLError as exc:
+        print(f"error: could not fetch URL: {exc.reason}", file=sys.stderr)
+    except sqlite3.DatabaseError as exc:
+        print(f"error: {args.index} is not a usable rag index ({exc})", file=sys.stderr)
+    except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 2
+    return 2
 
 
 if __name__ == "__main__":

@@ -123,6 +123,16 @@ class EndToEndTest(unittest.TestCase):
         code, _ = run("--index", str(Path(self.tmp.name) / "empty.sqlite"), "ask", "anything")
         self.assertEqual(code, 1)
 
+    def test_cli_errors_are_one_line_not_tracebacks(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(main(["--index", str(ROOT / "README.md"), "stats"]), 2)
+            self.assertEqual(main(["--index", self.index_path, "ingest", "http://127.0.0.1:9/x.html"]), 2)
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("is not a usable rag index", lines[0])
+        self.assertIn("could not fetch URL", lines[1])
+
     def test_eval_quality_floor(self):
         questions = load_questions(QUESTIONS)
         index = Index(self.index_path)
