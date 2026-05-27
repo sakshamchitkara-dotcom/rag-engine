@@ -68,6 +68,26 @@ class EndToEndTest(unittest.TestCase):
             self.assertEqual(ix.sources(), ["a.md", "c.md"])
             self.assertIn("daily", ix.search("alpha keys", k=1)[0].chunk.text)
 
+    def test_same_file_name_in_two_folders_needs_a_prefix(self):
+        index = str(Path(self.tmp.name) / "clash.sqlite")
+        for name, text in (("handbook", "Vacation is 25 days."), ("runbook", "Page the on-call engineer.")):
+            Path(self.tmp.name, name).mkdir()
+            Path(self.tmp.name, name, "README.md").write_text(f"# {name}\n\n{text}")
+        run("--index", index, "ingest", str(Path(self.tmp.name, "handbook")))
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            main(["--index", index, "ingest", str(Path(self.tmp.name, "runbook"))])
+        self.assertIn("skipped README.md: that source name already belongs to", err.getvalue())
+        with Index(index) as ix:
+            self.assertIn("Vacation", ix.chunks[0].text)  # not overwritten by runbook/README.md
+        _, out = run("--index", index, "ingest", str(Path(self.tmp.name, "runbook")), "--prefix", "runbook")
+        self.assertIn("1 added", out)
+        with Index(index) as ix:
+            self.assertEqual(ix.sources(), ["README.md", "runbook/README.md"])
+        run("--index", index, "ingest", str(Path(self.tmp.name, "handbook")))  # re-ingest: no false conflict
+        with Index(index) as ix:
+            self.assertEqual(ix.sources(), ["README.md", "runbook/README.md"])
+
     def test_remove(self):
         index = str(Path(self.tmp.name) / "remove.sqlite")
         run("--index", index, "ingest", str(CORPUS))
