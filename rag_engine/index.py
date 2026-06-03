@@ -104,7 +104,10 @@ class Index:
         self._vectors: list[array] = []
         self._bm25: BM25 | None = None
         self._tags: dict[str, set[str]] = {}
-        self._lock = threading.Lock()  # lazy load may race under the threaded server
+        self._data_version = None
+        # Held by loads and whole searches, so a reload never swaps the data under a running query.
+        # ponytail: one lock serialises searches (tens of ms); the slow LLM call runs outside it.
+        self._lock = threading.RLock()
 
     # -- persistence ---------------------------------------------------------
 
@@ -220,9 +223,13 @@ class Index:
         return found
 
     def _load(self) -> None:
+        """Load chunks into memory, again whenever another connection (a `rag ingest`
+        while `rag serve` runs) has committed changes since the last load."""
         with self._lock:
-            if self._chunks is None:
+            version = self.db.execute("PRAGMA data_version").fetchone()[0]
+            if self._chunks is None or version != self._data_version:
                 self._load_locked()
+                self._data_version = version
 
     def _load_locked(self) -> None:
         rows = self.db.execute(
@@ -344,16 +351,17 @@ class Index:
             raise ValueError(f"rerank must be one of {('none', *RERANKERS)}")
         if not query.strip():
             return []
-        self._load()
-        allowed = self._allowed(sources, tags)
-        if allowed is not None and not allowed:
-            return []
-        if rerank in (None, "none"):
-            results = self._first_stage(query, k, mode, allowed)
-        else:
-            pool = self._first_stage(query, max(k, POOL), mode, allowed)
-            results = self._rerank(query, pool, k, rerank) if pool else []
-        return [Hit(self._chunks[i], score, ranks) for i, score, ranks in results]
+        with self._lock:
+            self._load()
+            allowed = self._allowed(sources, tags)
+            if allowed is not None and not allowed:
+                return []
+            if rerank in (None, "none"):
+                results = self._first_stage(query, k, mode, allowed)
+            else:
+                pool = self._first_stage(query, max(k, POOL), mode, allowed)
+                results = self._rerank(query, pool, k, rerank) if pool else []
+            return [Hit(self._chunks[i], score, ranks) for i, score, ranks in results]
 
     def close(self) -> None:
         self.db.close()
