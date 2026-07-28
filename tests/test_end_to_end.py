@@ -210,6 +210,17 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual([a["mode"] for a in result["answers"]], modes)
         self.assertEqual(set(result["answers"][0]), {"mode", "found", "precision", "avg_sentences", "misses"})
 
+    def test_eval_judge(self):
+        code, out = run("--index", self.index_path, "eval", "--questions", str(QUESTIONS), "--modes", "hybrid",
+                        "--judge", "--json")
+        self.assertEqual(code, 0)
+        judged = json.loads(out)["judged"]
+        self.assertEqual((judged["answered_by"], judged["judges"]), ("extractive", ["heuristic"]))
+        self.assertGreaterEqual(judged["correct"], 0.85)
+        self.assertEqual(judged["grounded"], 1.0)  # extractive answers quote their sources
+        _, out = run("--index", self.index_path, "eval", "--questions", str(QUESTIONS), "--modes", "hybrid", "--judge")
+        self.assertIn("judged by heuristic", out)
+
     def test_reranked_eval_quality_floor(self):
         index = Index(self.index_path)
         (report,) = evaluate(index, load_questions(QUESTIONS), modes=["hybrid+proximity"])

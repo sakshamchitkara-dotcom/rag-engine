@@ -12,7 +12,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import __version__
-from .evaluate import DEFAULT_MODES, evaluate, evaluate_answers, format_answer_table, format_table, load_questions
+from .evaluate import (DEFAULT_MODES, evaluate, evaluate_answers, format_answer_table, format_table, judge_answers,
+                       load_questions)
 from .generate import answer, cited_numbers
 from .index import MODES, Index
 from .loaders import load_path
@@ -173,9 +174,11 @@ def _eval(args, index: Index) -> int:
     modes = args.modes.split(",")
     reports = evaluate(index, questions, ks=ks, modes=modes)
     answers = [evaluate_answers(index, questions, k=5, mode=m) for m in modes]
+    judged = judge_answers(index, questions, k=5, mode=modes[0], use_llm=not args.no_llm) if args.judge else None
     if args.json:
         print(json.dumps({"retrieval": [r.to_dict() for r in reports],
-                          "answers": [a.to_dict() for a in answers]}, indent=2))
+                          "answers": [a.to_dict() for a in answers],
+                          **({"judged": judged.to_dict()} if judged else {})}, indent=2))
         return 0
     print(f"{len(questions)} questions, {len(index.chunks)} chunks\n")
     print(format_table(reports))
@@ -189,6 +192,13 @@ def _eval(args, index: Index) -> int:
     print(format_answer_table(answers))
     print("found = answer contains the labelled phrase; precision = share of answer sentences\n"
           "cited from a chunk that holds the answer; sentences = average per answer")
+    if judged:
+        d = judged.to_dict()
+        print(f"\nJudged answers ({d['mode']}, top 5; answered by {d['answered_by']}, "
+              f"judged by {'/'.join(d['judges'])}):")
+        print(f"correct   {d['correct']:.3f}\ngrounded  {d['grounded']:.3f}")
+        for f in d["failures"]:
+            print(f"  - {f['question']}\n    {f['reason'] or 'failed'}")
     return 0
 
 
@@ -257,6 +267,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="comma-separated retrievers to compare; add +proximity or +mmr to rerank, "
                         "+multi for Claude multi-query "
                         f"(default {','.join(DEFAULT_MODES)})")
+    s.add_argument("--judge", action="store_true",
+                   help="also grade the answers `rag ask` gives (first mode, top 5) for correctness and grounding: "
+                        "Claude judges when ANTHROPIC_API_KEY is set, a word-overlap heuristic otherwise")
+    s.add_argument("--no-llm", action="store_true", help="with --judge: extractive answers, heuristic judge")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_eval)
 
