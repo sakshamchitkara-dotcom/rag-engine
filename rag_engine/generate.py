@@ -184,28 +184,37 @@ def claude_available() -> bool:
 
 
 def _request(question: str, hits: list[Hit], model: str) -> dict:
+    return _messages_request(SYSTEM_PROMPT, build_prompt(question, hits), model)
+
+
+def _messages_request(system: str, user: str, model: str) -> dict:
     return dict(
         model=model,
         max_tokens=16000,
         # Claude Opus 5.5 always thinks; effort is the only dial. Grounded Q&A over a
         # handful of passages does not need deep deliberation.
         output_config={"effort": "low"},
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": build_prompt(question, hits)}],
+        system=system,
+        messages=[{"role": "user", "content": user}],
     )
 
 
-def claude_answer(question: str, hits: list[Hit], model: str = MODEL) -> str:
+def claude_complete(system: str, user: str, model: str = MODEL) -> str:
+    """One Claude turn; returns the text blocks joined. Raises on refusal or empty output."""
     import anthropic
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
-    response = client.messages.create(**_request(question, hits, model))
+    response = client.messages.create(**_messages_request(system, user, model))
     if response.stop_reason == "refusal":
         raise RuntimeError("Claude declined to answer this request")
     text = "".join(block.text for block in response.content if block.type == "text").strip()
     if not text:
         raise RuntimeError(f"Claude returned no text (stop_reason={response.stop_reason})")
     return text
+
+
+def claude_answer(question: str, hits: list[Hit], model: str = MODEL) -> str:
+    return claude_complete(SYSTEM_PROMPT, build_prompt(question, hits), model)
 
 
 def claude_stream(question: str, hits: list[Hit], model: str = MODEL) -> Iterator[str]:

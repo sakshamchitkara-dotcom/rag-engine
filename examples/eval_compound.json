@@ -1,0 +1,22 @@
+[
+  {"question": "How do I rotate an SDK key, and does the old one stop working immediately?", "source": "troubleshooting.txt", "contains": "24-hour grace period"},
+  {"question": "How do I rotate an SDK key, and does the old one stop working immediately?", "source": "troubleshooting.txt", "contains": "Rotate key"},
+  {"question": "What port does beacon-server listen on and what is the minimum PostgreSQL version?", "source": "configuration.md", "contains": "Defaults to 8420"},
+  {"question": "What port does beacon-server listen on and what is the minimum PostgreSQL version?", "source": "installation.md", "contains": "PostgreSQL 14"},
+  {"question": "How much does the Team plan cost, and how long is the free trial?", "source": "pricing.md", "contains": "$25 per seat"},
+  {"question": "How much does the Team plan cost, and how long is the free trial?", "source": "pricing.md", "contains": "14-day free trial"},
+  {"question": "What is the REST API rate limit and how often are backups taken on hosted plans?", "source": "api-reference.html", "contains": "300 requests per minute"},
+  {"question": "What is the REST API rate limit and how often are backups taken on hosted plans?", "source": "security.md", "contains": "every 6 hours"},
+  {"question": "Is Redis required to run Beacon? Which hashing algorithm picks the rollout bucket?", "source": "installation.md", "contains": "Redis is not required"},
+  {"question": "Is Redis required to run Beacon? Which hashing algorithm picks the rollout bucket?", "source": "overview.md", "contains": "MurmurHash3"},
+  {"question": "How often do SDKs flush evaluation events, and how long are they retained?", "source": "sdk-guide.md", "contains": "every 10 seconds"},
+  {"question": "How often do SDKs flush evaluation events, and how long are they retained?", "source": "configuration.md", "contains": "90 days"},
+  {"question": "Which plans include single sign-on and what uptime SLA does Enterprise have?", "source": "configuration.md", "contains": "Team and Enterprise plans only"},
+  {"question": "Which plans include single sign-on and what uptime SLA does Enterprise have?", "source": "pricing.md", "contains": "99.95%"},
+  {"question": "Can a deleted flag be restored, and which release removed the v1 REST API?", "source": "api-reference.html", "contains": "restored for 30 days"},
+  {"question": "Can a deleted flag be restored, and which release removed the v1 REST API?", "source": "changelog.md", "contains": "REST API v1 was removed"},
+  {"question": "How do I keep user emails out of analytics events; can I store passwords in a flag value?", "source": "security.md", "contains": "private attributes"},
+  {"question": "How do I keep user emails out of analytics events; can I store passwords in a flag value?", "source": "overview.md", "contains": "never put API keys or passwords"},
+  {"question": "How many SDK clients can one relay handle, and why shouldn't I create a new SDK client for every request?", "source": "overview.md", "contains": "20,000"},
+  {"question": "How many SDK clients can one relay handle, and why shouldn't I create a new SDK client for every request?", "source": "sdk-guide.md", "contains": "exhausts relay connections"}
+]

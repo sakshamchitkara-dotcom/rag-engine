@@ -4,7 +4,7 @@
     GET  /api/health  index stats
     POST /api/ask     {"question": str, "k": int?, "mode": "hybrid"|"bm25"|"dense"?,
                        "rerank": "none"|"proximity"|"mmr"?, "llm": bool?,
-                       "source": glob | [glob]?, "tag": str | [str]?}
+                       "source": glob | [glob]?, "tag": str | [str]?, "multi_query": bool?}
     POST /api/ask/stream  same body; Server-Sent Events: sources, delta..., [replace], done
 """
 
@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .generate import answer, claude_available, stream_answer
 from .index import MODES, Index
 from .rerank import RERANKERS
+from .rewrite import multi_search, rewrite_queries
 
 MAX_BODY = 64 * 1024
 MAX_QUESTION = 2000
@@ -152,7 +153,7 @@ def parse_ask(req: dict, default_k: int) -> dict | str:
     if sources is None or tags is None:
         return "'source' and 'tag' must be a non-empty string or a list of up to 20 of them"
     return {"question": question, "k": k, "mode": mode, "rerank": rerank, "sources": sources, "tags": tags,
-            "llm": bool(req.get("llm", True))}
+            "llm": bool(req.get("llm", True)), "multi_query": bool(req.get("multi_query", False))}
 
 
 def make_handler(index: Index, default_k: int = 5):
@@ -218,7 +219,10 @@ def make_handler(index: Index, default_k: int = 5):
             params = parse_ask(req, default_k)
             if isinstance(params, str):
                 return self._json(400, {"error": params})
-            hits = index.search(params["question"], k=params["k"], mode=params["mode"], rerank=params["rerank"],
+            queries = [params["question"]]
+            if params["multi_query"]:
+                queries = rewrite_queries(params["question"], use_llm=params["llm"])[0]
+            hits = multi_search(index, queries, k=params["k"], mode=params["mode"], rerank=params["rerank"],
                                 sources=params["sources"], tags=params["tags"])
             if self.path == "/api/ask/stream":
                 return self._sse(stream_answer(params["question"], hits, use_llm=params["llm"]))
