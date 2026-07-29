@@ -100,6 +100,31 @@ class LoadPathTest(unittest.TestCase):
                 self.assertEqual([d.source for d in load_path(tmp)], ["a.md"])
         self.assertIn("broken.pdf: ValueError: stream ended", err.getvalue())
 
+    def test_url_kind_comes_from_content_type_and_size_is_capped(self):
+        class Handler(_Quiet):
+            def do_GET(self):
+                body = b"Plain notes\n\nServed as text." if self.path == "/notes" else b"x" * 64
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain" if self.path == "/notes" else "application/pdf")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_port}"
+        try:
+            [doc] = load_path(base + "/notes")  # no suffix: text/plain decides
+            self.assertEqual((doc.title, doc.text), ("Plain notes", "# Plain notes\n\nServed as text."))
+            with mock.patch("rag_engine.loaders.pdf_to_text", return_value="pdf text") as pdf:
+                [doc] = load_path(base + "/report")  # no suffix: application/pdf decides
+            pdf.assert_called_once()
+            with mock.patch("rag_engine.loaders.MAX_URL_BYTES", 10), self.assertRaises(ValueError):
+                load_path(base + "/report")
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_loads_html_from_url(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_Quiet, directory=str(CORPUS)))
         threading.Thread(target=server.serve_forever, daemon=True).start()

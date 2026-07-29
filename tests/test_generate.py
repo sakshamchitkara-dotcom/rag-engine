@@ -172,6 +172,32 @@ class ClaudePathTest(unittest.TestCase):
         self.assertEqual(result.mode, "extractive")
         self.assertIn("declined", result.warning)
 
+    def test_each_api_failure_has_its_own_warning(self):
+        cases = [
+            (FakeAnthropic.AuthenticationError(), "ANTHROPIC_API_KEY was rejected"),
+            (FakeAnthropic.APIStatusError(), "Claude API error 500"),
+            (FakeAnthropic.APIConnectionError(), "could not reach the Claude API"),
+        ]
+        for error, warning in cases:
+            with self.subTest(error=type(error).__name__):
+                result = self.run_with(FakeAnthropic(error=error))
+                self.assertEqual(result.mode, "extractive")
+                self.assertEqual(result.warning, f"{warning}; used extractive fallback")
+
+    def test_empty_reply_falls_back(self):
+        result = self.run_with(FakeAnthropic(response("  ")))
+        self.assertIn("returned no text", result.warning)
+
+    def test_programming_errors_are_not_swallowed(self):
+        with self.assertRaises(KeyError):
+            self.run_with(FakeAnthropic(error=KeyError("bug")))
+
+    def test_sdk_not_installed_means_no_claude(self):
+        with mock.patch.dict(sys.modules, {"anthropic": None}), \
+                mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test"}):
+            self.assertFalse(generate.claude_available())
+            self.assertEqual(generate.answer("How many requests per minute?", HITS).mode, "extractive")
+
     def test_no_llm_flag(self):
         fake = FakeAnthropic(response("unused"))
         with mock.patch.dict(sys.modules, {"anthropic": fake}), mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "k"}):
