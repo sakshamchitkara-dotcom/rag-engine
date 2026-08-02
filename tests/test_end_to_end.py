@@ -13,6 +13,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
+from rag_engine import __version__
 from rag_engine.cli import main
 from rag_engine.evaluate import evaluate, evaluate_answers, load_questions
 from rag_engine.index import Index
@@ -284,6 +285,7 @@ class ServerTest(unittest.TestCase):
         self.assertIn(b"/api/ask/stream", page)
         with urllib.request.urlopen(self.base + "/api/health") as resp:
             health = json.loads(resp.read())
+            self.assertTrue(resp.headers["Server"].startswith(f"rag-engine/{__version__} "))
         self.assertEqual(health["sources"], 9)
         self.assertGreater(health["chunks"], 9)
 

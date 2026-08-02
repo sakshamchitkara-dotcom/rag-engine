@@ -14,6 +14,7 @@ import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import __version__
 from .generate import answer, claude_available, stream_answer
 from .index import MODES, Index
 from .rerank import RERANKERS
@@ -158,7 +159,7 @@ def parse_ask(req: dict, default_k: int) -> dict | str:
 
 def make_handler(index: Index, default_k: int = 5):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "rag-engine/0.1"
+        server_version = f"rag-engine/{__version__}"
 
         def _send(self, status: int, body: bytes, ctype: str) -> None:
             self.send_response(status)
