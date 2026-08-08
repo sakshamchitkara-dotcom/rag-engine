@@ -1,0 +1,8 @@
+.git
+.github
+.venv
+.rag
+**/__pycache__
+*.egg-info
+*.sqlite
+tests
