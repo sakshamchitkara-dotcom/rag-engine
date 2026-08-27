@@ -161,8 +161,19 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn("300 requests per minute", out.getvalue())
 
     def test_ask_on_empty_index(self):
-        code, _ = run("--index", str(Path(self.tmp.name) / "empty.sqlite"), "ask", "anything")
+        empty = str(Path(self.tmp.name) / "empty.sqlite")
+        Index(empty).close()
+        code, _ = run("--index", empty, "ask", "anything")
         self.assertEqual(code, 1)
+
+    def test_read_commands_do_not_create_a_missing_index(self):
+        missing = Path(self.tmp.name) / "typo" / "index.sqlite"
+        for argv in (["stats"], ["ask", "x"], ["eval"], ["vacuum"], ["remove", "a.md"], ["serve"]):
+            err = io.StringIO()
+            with self.subTest(argv=argv), contextlib.redirect_stderr(err):
+                self.assertEqual(main(["--index", str(missing), *argv]), 2)
+            self.assertIn(f"no index at {missing}; run `rag ingest <path>` first", err.getvalue())
+        self.assertFalse(missing.parent.exists())
 
     def test_cli_errors_are_one_line_not_tracebacks(self):
         err = io.StringIO()

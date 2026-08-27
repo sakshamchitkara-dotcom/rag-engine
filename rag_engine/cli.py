@@ -44,7 +44,10 @@ def _cutoffs(text: str) -> tuple[int, ...]:
     return tuple(sorted({parse(k.strip()) for k in text.split(",") if k.strip()})) or parse("")
 
 
-def _open(args, embedder: str | None = None) -> Index:
+def _open(args, embedder: str | None = None, *, create: bool = False) -> Index:
+    """Open the index; only `ingest` may create it (a mistyped --index must not leave an empty file)."""
+    if not create and not Path(args.index).exists():
+        raise FileNotFoundError(f"no index at {args.index}; run `rag ingest <path>` first")
     return Index(args.index, embedder=embedder)
 
 
@@ -62,9 +65,9 @@ def cmd_ingest(args) -> int:
             print(f"warning: no supported documents found in {target}", file=sys.stderr)
         batches.append((target, loaded))
     if args.reset:
-        with _open(args) as index:
+        with _open(args, create=True) as index:
             index.reset()
-    with _open(args, args.embedder) as index:
+    with _open(args, args.embedder, create=True) as index:
         for target, docs in batches:
             r = index.add_documents(docs, max_chars=args.chunk_size, overlap=args.overlap,
                                     origin=_origin(target), prune=Path(target).is_dir(), tags=tuple(args.tag) if args.tag else None)
