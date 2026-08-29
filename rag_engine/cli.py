@@ -38,6 +38,13 @@ def _int_range(lo: int, hi: int | None = None):
     return parse
 
 
+def _question(text: str) -> str:
+    """argparse type: a question with at least one non-blank character."""
+    if not text.strip():
+        raise argparse.ArgumentTypeError("the question is empty")
+    return text
+
+
 def _cutoffs(text: str) -> tuple[int, ...]:
     """argparse type for `rag eval --k 1,3,5`."""
     parse = _int_range(1)
@@ -248,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_vacuum)
 
     s = sub.add_parser("ask", help="answer a question with citations")
-    s.add_argument("question")
+    s.add_argument("question", type=_question)
     s.add_argument("-k", type=_int_range(1, 100), default=5, help="chunks to retrieve (default 5)")
     s.add_argument("--mode", choices=MODES, default="hybrid")
     s.add_argument("--rerank", choices=("none", *RERANKERS), default="none",
