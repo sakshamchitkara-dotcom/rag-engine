@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -172,10 +173,15 @@ def make_handler(index: Index, default_k: int = 5):
         def _json(self, status: int, payload: dict) -> None:
             self._send(status, json.dumps(payload).encode(), "application/json")
 
+        @property
+        def route(self) -> str:
+            """Request path without the query string: "/?utm=x" is still the chat page."""
+            return urllib.parse.urlsplit(self.path).path
+
         def do_GET(self):
-            if self.path == "/":
+            if self.route == "/":
                 self._send(200, PAGE.encode(), "text/html; charset=utf-8")
-            elif self.path == "/api/health":
+            elif self.route == "/api/health":
                 self._json(200, {"chunks": len(index.chunks), "sources": len(index.sources()),
                                  "llm": claude_available()})
             else:
@@ -203,7 +209,7 @@ def make_handler(index: Index, default_k: int = 5):
             self.close_connection = True
 
         def do_POST(self):
-            if self.path not in ("/api/ask", "/api/ask/stream"):
+            if self.route not in ("/api/ask", "/api/ask/stream"):
                 return self._json(404, {"error": "not found"})
             try:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -225,7 +231,7 @@ def make_handler(index: Index, default_k: int = 5):
                 queries = rewrite_queries(params["question"], use_llm=params["llm"])[0]
             hits = multi_search(index, queries, k=params["k"], mode=params["mode"], rerank=params["rerank"],
                                 sources=params["sources"], tags=params["tags"])
-            if self.path == "/api/ask/stream":
+            if self.route == "/api/ask/stream":
                 return self._sse(stream_answer(params["question"], hits, use_llm=params["llm"]))
             self._json(200, answer(params["question"], hits, use_llm=params["llm"]).to_dict())
 
