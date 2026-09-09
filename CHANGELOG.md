@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/) (0.x: minor versions may break things).
 
+## [0.3.1] - 2026-09-25
+
+### Fixed
+
+- `rag stats`, `ask`, `eval`, `vacuum`, `remove` and `serve` with a mistyped `--index`
+  created an empty index file (and its folder); they now exit 2 with
+  "error: no index at PATH; run `rag ingest <path>` first". Only `ingest` creates an index.
+- `rag ask "  "` printed an empty answer with exit 0; a blank question is now a usage
+  error, as it already was in the HTTP API.
+- The server returned 404 for routes with a query string (`/?utm_source=x`,
+  `/api/health?probe=1`, `POST /api/ask?debug=1`).
+- Opening a non-SQLite `--index` leaked its database connection (a `ResourceWarning`
+  on a later command's stderr).
+
 ## [0.3.0] - 2026-09-25
 
 ### Added
