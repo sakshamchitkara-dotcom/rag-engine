@@ -90,8 +90,12 @@ class Index:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path, check_same_thread=False)
-        self.db.executescript(_SCHEMA)
-        stored = self._meta("embedder")
+        try:
+            self.db.executescript(_SCHEMA)
+            stored = self._meta("embedder")
+        except sqlite3.DatabaseError:  # not a SQLite file: don't leak the connection
+            self.db.close()
+            raise
         if stored and embedder and stored != embedder:
             self.db.close()
             raise ValueError(

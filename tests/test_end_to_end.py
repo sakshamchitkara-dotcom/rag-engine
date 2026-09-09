@@ -181,7 +181,7 @@ class EndToEndTest(unittest.TestCase):
             self.assertEqual(main(["--index", str(ROOT / "README.md"), "stats"]), 2)
             self.assertEqual(main(["--index", self.index_path, "ingest", "http://127.0.0.1:9/x.html"]), 2)
         lines = err.getvalue().splitlines()
-        self.assertEqual(len(lines), 2)
+        self.assertEqual(len(lines), 2, lines)
         self.assertIn("is not a usable rag index", lines[0])
         self.assertIn("could not fetch URL", lines[1])
 
