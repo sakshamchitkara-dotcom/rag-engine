@@ -1,4 +1,4 @@
-"""Command line interface: rag ingest | remove | stats | vacuum | ask | eval | serve."""
+"""Command line interface: rag ingest | remove | stats | vacuum | ask | chat | eval | serve."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import __version__
+from .conversation import condense
 from .evaluate import (DEFAULT_MODES, evaluate, evaluate_answers, format_answer_table, format_table, judge_answers,
                        load_questions)
 from .generate import answer, cited_numbers
@@ -137,22 +138,56 @@ def _require_chunks(index: Index) -> bool:
 
 def cmd_ask(args) -> int:
     with _open(args) as index:
-        return _ask(args, index)
+        if not _require_chunks(index):
+            return 1
+        return _ask(args, index, args.question)
 
 
-def _ask(args, index: Index) -> int:
-    if not _require_chunks(index):
-        return 1
-    queries, rewrite_warning = [args.question], None
+def cmd_chat(args) -> int:
+    """Read questions from stdin; follow-ups are condensed with the earlier questions."""
+    with _open(args) as index:
+        if not _require_chunks(index):
+            return 1
+        interactive = sys.stdin.isatty()
+        if interactive:
+            print("Ask a question; follow-ups can refer to earlier ones. /reset starts over, Ctrl+D quits.")
+        history: list[str] = []
+        while True:
+            try:
+                line = input("\n> " if interactive else "").strip()
+            except EOFError:
+                break
+            if line in ("/exit", "/quit"):
+                break
+            if line == "/reset":
+                history = []
+                print("(new conversation)")
+                continue
+            if not line:
+                continue
+            if not interactive:
+                print(f"> {line}")  # echo piped questions so the transcript reads as a conversation
+            question, warning = condense(line, history, use_llm=not args.no_llm)
+            if warning:
+                print(f"warning: {warning}", file=sys.stderr, flush=True)
+            if question != line:
+                print(f"(as: {question})")
+            _ask(args, index, question)
+            history.append(line)
+    return 0
+
+
+def _ask(args, index: Index, question: str) -> int:
+    queries, rewrite_warning = [question], None
     if args.multi_query:
-        queries, rewrite_warning = rewrite_queries(args.question, use_llm=not args.no_llm)
+        queries, rewrite_warning = rewrite_queries(question, use_llm=not args.no_llm)
         if len(queries) == 1 and not rewrite_warning:
             rewrite_warning = "--multi-query needs Claude (ANTHROPIC_API_KEY); searched the question as written"
     hits = multi_search(index, queries, k=args.k, mode=args.mode, rerank=args.rerank,
                         sources=args.source, tags=args.tag)
     if not hits and (args.source or args.tag):
         print("warning: no indexed chunks match the --source/--tag filters", file=sys.stderr)
-    result = answer(args.question, hits, use_llm=not args.no_llm)
+    result = answer(question, hits, use_llm=not args.no_llm)
     if args.json:
         print(json.dumps({**result.to_dict(), "queries": queries}, indent=2))
         return 0
@@ -222,6 +257,21 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def _search_args(s: argparse.ArgumentParser) -> None:
+    """Retrieval and answer options shared by `ask` and `chat`."""
+    s.add_argument("-k", type=_int_range(1, 100), default=5, help="chunks to retrieve (default 5)")
+    s.add_argument("--mode", choices=MODES, default="hybrid")
+    s.add_argument("--rerank", choices=("none", *RERANKERS), default="none",
+                   help="rerank the top 20 candidates: proximity (query terms close together) or mmr (diversity)")
+    s.add_argument("--source", action="append", default=[],
+                   help="only search documents whose source matches this glob, e.g. 'api-*' (repeatable: any)")
+    s.add_argument("--tag", action="append", default=[],
+                   help="only search documents with this ingest tag (repeatable: any)")
+    s.add_argument("--multi-query", action="store_true",
+                   help="have Claude rewrite the question into up to 3 extra search queries and fuse the results")
+    s.add_argument("--no-llm", action="store_true", help="skip Claude; use the extractive answerer")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="rag", description="Small hybrid-retrieval RAG engine.")
     p.add_argument("--version", action="version", version=f"rag-engine {__version__}")
@@ -256,19 +306,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("ask", help="answer a question with citations")
     s.add_argument("question", type=_question)
-    s.add_argument("-k", type=_int_range(1, 100), default=5, help="chunks to retrieve (default 5)")
-    s.add_argument("--mode", choices=MODES, default="hybrid")
-    s.add_argument("--rerank", choices=("none", *RERANKERS), default="none",
-                   help="rerank the top 20 candidates: proximity (query terms close together) or mmr (diversity)")
-    s.add_argument("--source", action="append", default=[],
-                   help="only search documents whose source matches this glob, e.g. 'api-*' (repeatable: any)")
-    s.add_argument("--tag", action="append", default=[],
-                   help="only search documents with this ingest tag (repeatable: any)")
-    s.add_argument("--multi-query", action="store_true",
-                   help="have Claude rewrite the question into up to 3 extra search queries and fuse the results")
-    s.add_argument("--no-llm", action="store_true", help="skip Claude; use the extractive answerer")
+    _search_args(s)
     s.add_argument("--json", action="store_true", help="print the full result as JSON")
     s.set_defaults(func=cmd_ask)
+
+    s = sub.add_parser("chat", help="answer questions from stdin, carrying context over to follow-ups")
+    _search_args(s)
+    s.set_defaults(func=cmd_chat, json=False)
 
     s = sub.add_parser("eval", help="retrieval eval (recall@k, MRR) and extractive answer quality")
     s.add_argument("--questions", default=DEFAULT_QUESTIONS, help=f"question file (default {DEFAULT_QUESTIONS})")
