@@ -56,6 +56,11 @@ PAGE = """<!doctype html>
   .src { border-top: 1px solid var(--line); padding: 8px 0; }
   .src b { color: var(--accent); }
   .src p { margin: 4px 0 0; color: var(--muted); white-space: pre-wrap; }
+  .src.cited { border-left: 3px solid var(--accent); padding-left: 8px; }
+  .src.flash { background: var(--line); transition: background .3s; }
+  mark { background: #f3dd8a; color: #1d1d1b; border-radius: 2px; }
+  a.cite { color: var(--accent); text-decoration: none; font-size: 13px; }
+  a.cite:hover, a.cite:focus { text-decoration: underline; }
   form { position: fixed; left: 0; right: 0; bottom: 0; background: var(--bg); border-top: 1px solid var(--line); }
   .row { max-width: 760px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 8px; }
   input { flex: 1; min-width: 0; font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
@@ -88,6 +93,34 @@ document.getElementById("new").addEventListener("click", () => {
   if (history.length) log.prepend(el("div", "divider", "new conversation"));
   history = []; q.focus();
 });
+// Answer text with each [n] turned into a link that opens and highlights source n.
+function renderAnswer(body, text, sources, det) {
+  body.textContent = "";
+  let last = 0;
+  for (const m of text.matchAll(/\\[(\\d+)\\]/g)) {
+    const s = sources[Number(m[1]) - 1];
+    body.append(text.slice(last, m.index));
+    last = m.index + m[0].length;
+    if (!s) { body.append(m[0]); continue; }
+    const a = el("a", "cite", m[0]);
+    a.href = "#"; a.title = `${s.source} - ${s.heading || s.title}\\n\\n${s.text.slice(0, 300)}`;
+    a.addEventListener("click", (e) => {
+      e.preventDefault(); det.open = true;
+      const target = det.querySelector(`[data-n="${s.n}"]`);
+      target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      target.classList.add("flash"); setTimeout(() => target.classList.remove("flash"), 1200);
+    });
+    body.append(a);
+  }
+  body.append(text.slice(last));
+}
+// Source text with the query terms the server matched wrapped in <mark>.
+function highlighted(text, spans) {
+  const p = el("p"); let last = 0;
+  for (const [a, b] of spans || []) { p.append(text.slice(last, a), el("mark", null, text.slice(a, b))); last = b; }
+  p.append(text.slice(last));
+  return p;
+}
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 fetch("/api/health").then(r => r.json()).then(h => {
   document.getElementById("status").textContent =
@@ -130,12 +163,15 @@ document.getElementById("f").addEventListener("submit", async (ev) => {
     if (done.question !== question) card.insertBefore(el("div", "as", `searched as: ${done.question}`), body);
     card.append(el("div", "meta", `mode: ${done.mode} - ${sources.length} sources`));
     if (done.warning) card.append(el("div", "warn", done.warning));
-    const det = el("details"); det.append(el("summary", null, "Sources"));
+    const cited = new Set([...text.matchAll(/\\[(\\d+)\\]/g)].map(m => Number(m[1])));
+    const det = el("details"); det.append(el("summary", null, `Sources (${cited.size} cited)`));
     for (const s of sources) {
-      const d = el("div", "src"); d.append(el("b", null, `[${s.n}] `), document.createTextNode(`${s.source} - ${s.heading || s.title}`));
-      d.append(el("p", null, s.text)); det.append(d);
+      const d = el("div", cited.has(s.n) ? "src cited" : "src"); d.dataset.n = s.n;
+      d.append(el("b", null, `[${s.n}] `), document.createTextNode(`${s.source} - ${s.heading || s.title}`));
+      d.append(highlighted(s.text, s.highlights)); det.append(d);
     }
     card.append(det);
+    renderAnswer(body, text, sources, det);
   } catch (e) { body.textContent = "Error: " + e.message; }
   finally { b.disabled = false; q.focus(); }
 });

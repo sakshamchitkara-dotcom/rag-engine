@@ -47,6 +47,12 @@ def tokenize(text: str, *, keep_stopwords: bool = False) -> list[str]:
     return [_stem(t) for t in tokens]
 
 
+def term_spans(text: str, terms: set[str]) -> list[tuple[int, int]]:
+    """Character spans of the words in `text` whose token is in `terms` (tokenized form),
+    so 'Limits' is found for the query term 'limit'."""
+    return [m.span() for m in _TOKEN_RE.finditer(text.lower()) if (tok := tokenize(m.group())) and tok[0] in terms]
+
+
 def split_sentences(text: str) -> list[str]:
     """Split prose into sentences. Good enough for English docs; not a full segmenter."""
     text = " ".join(text.split())
