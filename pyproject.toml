@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rag-engine"
+version = "0.1.0"
+description = "A small, dependency-free retrieval-augmented generation engine: BM25 + hashed dense vectors, hybrid RRF retrieval, Claude answers with citations."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+claude = ["anthropic>=0.70"]
+pdf = ["pypdf>=4"]
+all = ["anthropic>=0.70", "pypdf>=4"]
+
+[project.scripts]
+rag = "rag_engine.cli:main"
+
+[tool.setuptools]
+packages = ["rag_engine"]
