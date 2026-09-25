@@ -68,28 +68,39 @@ def extractive_answer(question: str, hits: list[Hit], max_sentences: int = 3) ->
     q_terms = set(tokenize(question))
     if not q_terms or not hits:
         return NO_ANSWER
-    candidates: list[tuple[str, int, set[str]]] = []
+    candidates: list[tuple[str, int, set[str], set[str]]] = []
     for n, h in enumerate(hits, start=1):
+        # The section heading is context for every sentence under it ("Rate limits" ->
+        # "300 requests per minute"), so heading terms count at a discount.
+        heading = set(tokenize(h.chunk.heading.rsplit(" > ", 1)[-1]))
         for para in h.chunk.text.split("\n\n"):
             if para.lstrip().startswith(("```", "|")):
                 continue  # code blocks and tables make poor answer sentences
-            for sentence in split_sentences(para):
-                candidates.append((sentence, n, set(tokenize(sentence))))
+            lines = para.splitlines()
+            units = ([ln.lstrip("-* ").strip() for ln in lines]
+                     if all(ln.lstrip().startswith(("- ", "* ")) for ln in lines) else [para])
+            for unit in units:
+                for sentence in split_sentences(re.sub(r"\*\*|__", "", unit)):
+                    candidates.append((sentence, n, set(tokenize(sentence)), heading))
     # IDF over the candidate sentences so rare query terms dominate common ones.
-    df = {t: sum(t in toks for _, _, toks in candidates) for t in q_terms}
     total = len(candidates)
+    idf = {t: math.log(1 + total / max(1, sum(t in (a | b) for _, _, a, b in candidates))) for t in q_terms}
     scored = []
-    for i, (sentence, n, toks) in enumerate(candidates):
-        overlap = q_terms & toks
-        if not overlap:
+    for i, (sentence, n, toks, heading) in enumerate(candidates):
+        direct = q_terms & toks
+        if not direct and not q_terms & heading:
             continue
-        weight = sum(math.log(1 + total / df[t]) for t in overlap)
+        weight = sum(idf[t] for t in direct) + 0.5 * sum(idf[t] for t in (q_terms & heading) - toks)
         score = weight / math.sqrt(len(toks) + 1) + 0.15 / n  # slight preference for top-ranked chunks
         scored.append((score, i, sentence, n))
     if not scored:
         return NO_ANSWER
+    scored.sort(key=lambda s: (-s[0], s[1]))
+    floor = scored[0][0] * 0.5  # drop sentences that only graze the query
     picked, seen = [], set()
-    for _, i, sentence, n in sorted(scored, key=lambda s: (-s[0], s[1])):
+    for score, i, sentence, n in scored:
+        if score < floor:
+            break
         key = sentence.lower()
         if key in seen:
             continue
