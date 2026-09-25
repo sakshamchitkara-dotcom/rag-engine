@@ -35,7 +35,14 @@ jobs:
           rag remove pricing.md
           rag stats | tee stats.log
           grep -q "from 8 documents" stats.log
-          rag eval
+          rag vacuum | tee vacuum.log
+          grep -q "KiB reclaimed" vacuum.log
+          rag ingest examples/corpus
+          rag ask "How many seats does the Team plan allow?" --source 'pricing.*' | tee table.log
+          grep -q "Seats: Up to 50" table.log
+          rag eval --judge --modes hybrid,hybrid+proximity | tee eval.log
+          grep -q "judged by heuristic" eval.log
+          rag eval --questions examples/eval_compound.json --modes hybrid
 
   pdf:
     runs-on: ubuntu-latest
