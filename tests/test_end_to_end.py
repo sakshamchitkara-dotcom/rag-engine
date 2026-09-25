@@ -113,6 +113,12 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("300 requests per minute", json.loads(out)["answer"])
 
+    def test_ask_with_source_filter(self):
+        code, out = run("--index", self.index_path, "ask", "How long is the free trial?",
+                        "--source", "troubleshooting.*", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual({s["source"] for s in json.loads(out)["sources"]}, {"troubleshooting.txt"})
+
     def test_ask_on_empty_index(self):
         code, _ = run("--index", str(Path(self.tmp.name) / "empty.sqlite"), "ask", "anything")
         self.assertEqual(code, 1)

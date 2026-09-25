@@ -125,6 +125,23 @@ class IndexTest(unittest.TestCase):
             ix.add_documents(DOCS, tags=("a,b",))
         ix.close()
 
+    def test_source_and_tag_filters(self):
+        ix = Index(self.path)
+        ix.add_documents(DOCS[:1], tags=("api",))
+        ix.add_documents(DOCS[1:] + [Document("guides/pets-api.md", "G", "# G\n\nThe pets API allows requests.")],
+                         tags=("pets",))
+        q = "API requests"
+        self.assertEqual({h.chunk.source for h in ix.search(q, sources=["guides/*"])}, {"guides/pets-api.md"})
+        self.assertEqual({h.chunk.source for h in ix.search(q, tags=["API"])}, {"limits.md"})
+        self.assertEqual({h.chunk.source for h in ix.search(q, tags=["api", "pets"])},
+                         {"limits.md", "guides/pets-api.md"})  # any tag
+        self.assertEqual(ix.search(q, sources=["limits.md"], tags=["pets"]), [])  # filters combine with AND
+        for mode in ("bm25", "dense"):
+            hits = ix.search(q, mode=mode, rerank="proximity", sources=["*.md"], tags=["pets"])
+            self.assertTrue(hits and all(h.chunk.source != "limits.md" for h in hits), mode)
+        self.assertEqual(ix.search(q, sources=["nope*"]), [])
+        ix.close()
+
     def test_embedder_is_pinned(self):
         ix = Index(self.path, embedder="hash:128")
         ix.add_documents(DOCS)

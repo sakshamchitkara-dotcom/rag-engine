@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import sqlite3
 import threading
@@ -101,6 +102,7 @@ class Index:
         self._chunks: list[Chunk] | None = None
         self._vectors: list[array] = []
         self._bm25: BM25 | None = None
+        self._tags: dict[str, set[str]] = {}
         self._lock = threading.Lock()  # lazy load may race under the threaded server
 
     # -- persistence ---------------------------------------------------------
@@ -171,8 +173,8 @@ class Index:
             )
             self.db.executemany("UPDATE documents SET tags = ? WHERE source = ?",
                                 [(tag_text, src) for src in result.unchanged])
-        if changed:
-            self._invalidate()
+        if docs:
+            self._invalidate()  # chunks or tags changed
         if prune and origin:
             keep = {d.source for d in docs}
             gone = [src for (src,) in self.db.execute("SELECT source FROM documents WHERE origin = ?", (origin,))
@@ -222,6 +224,8 @@ class Index:
             vec.frombytes(blob)
             vectors.append(vec)
             bm25.add(chunk.indexed_text)
+        self._tags = {src: set(t.split(",")) if t else set()
+                      for src, t in self.db.execute("SELECT source, tags FROM documents")}
         self._vectors, self._bm25 = vectors, bm25
         self._chunks = chunks  # assigned last: it is the "loaded" flag
 
@@ -253,27 +257,46 @@ class Index:
 
     # -- retrieval -----------------------------------------------------------
 
-    def _bm25_ranking(self, query: str, n: int) -> list[tuple[int, float]]:
-        self._load()
-        return self._bm25.search(query, n)
+    def _allowed(self, sources: list[str] | None, tags: list[str] | None) -> set[int] | None:
+        """Chunk ids passing the metadata filters (None = no filter).
 
-    def _dense_ranking(self, query: str, n: int) -> list[tuple[int, float]]:
+        A chunk passes when its source matches any `sources` glob (fnmatch, e.g.
+        'api-*' or 'guides/*') and its document carries any of `tags`.
+        """
+        if not sources and not tags:
+            return None
+        wanted = {t.strip().lower() for t in tags or ()}
+        return {
+            i for i, c in enumerate(self._chunks)
+            if (not sources or any(fnmatch.fnmatchcase(c.source, p) for p in sources))
+            and (not wanted or wanted & self._tags.get(c.source, set()))
+        }
+
+    def _bm25_ranking(self, query: str, n: int, allowed: set[int] | None = None) -> list[tuple[int, float]]:
+        self._load()
+        if allowed is None:
+            return self._bm25.search(query, n)
+        # ponytail: scores every matching chunk then filters; fine at this index size.
+        return [(i, s) for i, s in self._bm25.search(query, len(self._bm25)) if i in allowed][:n]
+
+    def _dense_ranking(self, query: str, n: int, allowed: set[int] | None = None) -> list[tuple[int, float]]:
         self._load()
         if not self._vectors:
             return []
         q = self.embedder.embed([query])[0]
-        scored = [(i, cosine(q, v)) for i, v in enumerate(self._vectors)]
+        scored = [(i, cosine(q, v)) for i, v in enumerate(self._vectors) if allowed is None or i in allowed]
         scored = [s for s in scored if s[1] > 0]
         return sorted(scored, key=lambda s: (-s[1], s[0]))[:n]
 
-    def _first_stage(self, query: str, n: int, mode: str) -> list[tuple[int, float, dict[str, int]]]:
+    def _first_stage(self, query: str, n: int, mode: str,
+                     allowed: set[int] | None = None) -> list[tuple[int, float, dict[str, int]]]:
         if mode == "bm25":
-            return [(i, s, {"bm25": r}) for r, (i, s) in enumerate(self._bm25_ranking(query, n), 1)]
+            return [(i, s, {"bm25": r}) for r, (i, s) in enumerate(self._bm25_ranking(query, n, allowed), 1)]
         if mode == "dense":
-            return [(i, s, {"dense": r}) for r, (i, s) in enumerate(self._dense_ranking(query, n), 1)]
+            return [(i, s, {"dense": r}) for r, (i, s) in enumerate(self._dense_ranking(query, n, allowed), 1)]
         return rrf({
-            "bm25": [i for i, _ in self._bm25_ranking(query, max(n, 50))],
-            "dense": [i for i, _ in self._dense_ranking(query, max(n, 50))],
+            "bm25": [i for i, _ in self._bm25_ranking(query, max(n, 50), allowed)],
+            "dense": [i for i, _ in self._dense_ranking(query, max(n, 50), allowed)],
         })[:n]
 
     def _rerank(self, query: str, pool: list[tuple[int, float, dict[str, int]]], k: int,
@@ -291,8 +314,12 @@ class Index:
                     lambda a, b: cosine(self._vectors[pool[a][0]], self._vectors[pool[b][0]]), k)
         return [(pool[p][0], pool[p][1], {**pool[p][2], "mmr": r}) for r, p in enumerate(order, 1)]
 
-    def search(self, query: str, k: int = 5, mode: str = "hybrid", rerank: str | None = None) -> list[Hit]:
-        """Top-k chunks for `query`; `rerank` reorders the first-stage top POOL candidates."""
+    def search(self, query: str, k: int = 5, mode: str = "hybrid", rerank: str | None = None, *,
+               sources: list[str] | None = None, tags: list[str] | None = None) -> list[Hit]:
+        """Top-k chunks for `query`; `rerank` reorders the first-stage top POOL candidates.
+
+        `sources` (glob patterns) and `tags` restrict the search to matching documents.
+        """
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
         if rerank not in (None, "none", *RERANKERS):
@@ -300,10 +327,13 @@ class Index:
         if not query.strip():
             return []
         self._load()
+        allowed = self._allowed(sources, tags)
+        if allowed is not None and not allowed:
+            return []
         if rerank in (None, "none"):
-            results = self._first_stage(query, k, mode)
+            results = self._first_stage(query, k, mode, allowed)
         else:
-            pool = self._first_stage(query, max(k, POOL), mode)
+            pool = self._first_stage(query, max(k, POOL), mode, allowed)
             results = self._rerank(query, pool, k, rerank) if pool else []
         return [Hit(self._chunks[i], score, ranks) for i, score, ranks in results]
 
