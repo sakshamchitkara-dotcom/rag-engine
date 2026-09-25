@@ -4,8 +4,12 @@
     GET  /api/health  index stats
     POST /api/ask     {"question": str, "k": int?, "mode": "hybrid"|"bm25"|"dense"?,
                        "rerank": "none"|"proximity"|"mmr"?, "llm": bool?,
-                       "source": glob | [glob]?, "tag": str | [str]?, "multi_query": bool?}
+                       "source": glob | [glob]?, "tag": str | [str]?, "multi_query": bool?,
+                       "history": [earlier question, ...]?}
     POST /api/ask/stream  same body; Server-Sent Events: sources, delta..., [replace], done
+
+With "history", the question is condensed into a standalone one first (see
+conversation.py); responses report it as "question".
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
+from .conversation import MAX_TURNS, condense
 from .generate import answer, claude_available, stream_answer
 from .index import MODES, Index
 from .rerank import RERANKERS
@@ -56,6 +61,9 @@ PAGE = """<!doctype html>
   input { flex: 1; min-width: 0; font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
   button { font: inherit; padding: 10px 16px; border-radius: 8px; border: 0; background: var(--accent); color: var(--bg); cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  .as { color: var(--muted); font-size: 13px; font-style: italic; }
+  .divider { color: var(--muted); font-size: 12px; text-align: center; margin: 16px 0; }
 </style>
 </head>
 <body>
@@ -69,10 +77,17 @@ PAGE = """<!doctype html>
     <label for="q" style="position:absolute;left:-9999px">Question</label>
     <input id="q" autocomplete="off" placeholder="Ask a question about the indexed documents" required maxlength="2000">
     <button id="b">Ask</button>
+    <button type="button" id="new" class="ghost" title="Forget earlier questions">New</button>
   </div>
 </form>
 <script>
 const log = document.getElementById("log"), q = document.getElementById("q"), b = document.getElementById("b");
+// Earlier questions of this conversation; the server condenses follow-ups with them.
+let history = [];
+document.getElementById("new").addEventListener("click", () => {
+  if (history.length) log.prepend(el("div", "divider", "new conversation"));
+  history = []; q.focus();
+});
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 fetch("/api/health").then(r => r.json()).then(h => {
   document.getElementById("status").textContent =
@@ -85,7 +100,7 @@ document.getElementById("f").addEventListener("submit", async (ev) => {
   const body = el("div", "a", "Thinking..."); card.append(body); log.prepend(card);
   q.value = ""; b.disabled = true;
   try {
-    const r = await fetch("/api/ask/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
+    const r = await fetch("/api/ask/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, history: history.slice(-10) }) });
     if (!r.ok) { const data = await r.json(); throw new Error(data.error || r.statusText); }
     // Server-Sent Events over a POST response: parse "event:/data:" blocks as they arrive.
     const reader = r.body.getReader(), dec = new TextDecoder();
@@ -111,6 +126,8 @@ document.getElementById("f").addEventListener("submit", async (ev) => {
       }
     }
     if (!done) throw new Error("the answer stream ended early");
+    history.push(question);
+    if (done.question !== question) card.insertBefore(el("div", "as", `searched as: ${done.question}`), body);
     card.append(el("div", "meta", `mode: ${done.mode} - ${sources.length} sources`));
     if (done.warning) card.append(el("div", "warn", done.warning));
     const det = el("details"); det.append(el("summary", null, "Sources"));
@@ -144,6 +161,7 @@ def parse_ask(req: dict, default_k: int) -> dict | str:
     mode = req.get("mode", "hybrid")
     rerank = req.get("rerank", "none")
     sources, tags = _str_list(req.get("source", [])), _str_list(req.get("tag", []))
+    history = req.get("history", [])
     if not isinstance(question, str) or not question.strip() or len(question) > MAX_QUESTION:
         return f"'question' must be a non-empty string up to {MAX_QUESTION} chars"
     if not isinstance(k, int) or isinstance(k, bool) or not 1 <= k <= 20:
@@ -154,8 +172,11 @@ def parse_ask(req: dict, default_k: int) -> dict | str:
         return f"'rerank' must be one of {['none', *RERANKERS]}"
     if sources is None or tags is None:
         return "'source' and 'tag' must be a non-empty string or a list of up to 20 of them"
+    if not isinstance(history, list) or not all(isinstance(h, str) and len(h) <= MAX_QUESTION for h in history):
+        return f"'history' must be a list of earlier questions, each up to {MAX_QUESTION} chars"
     return {"question": question, "k": k, "mode": mode, "rerank": rerank, "sources": sources, "tags": tags,
-            "llm": bool(req.get("llm", True)), "multi_query": bool(req.get("multi_query", False))}
+            "llm": bool(req.get("llm", True)), "multi_query": bool(req.get("multi_query", False)),
+            "history": history[-MAX_TURNS:]}
 
 
 def make_handler(index: Index, default_k: int = 5):
@@ -226,14 +247,20 @@ def make_handler(index: Index, default_k: int = 5):
             params = parse_ask(req, default_k)
             if isinstance(params, str):
                 return self._json(400, {"error": params})
-            queries = [params["question"]]
+            question, condense_warning = condense(params["question"], params["history"], use_llm=params["llm"])
+            queries = [question]
             if params["multi_query"]:
-                queries = rewrite_queries(params["question"], use_llm=params["llm"])[0]
+                queries = rewrite_queries(question, use_llm=params["llm"])[0]
             hits = multi_search(index, queries, k=params["k"], mode=params["mode"], rerank=params["rerank"],
                                 sources=params["sources"], tags=params["tags"])
+
+            def finish(done: dict) -> dict:  # report the standalone question that was answered
+                return {**done, "question": question, "warning": done["warning"] or condense_warning}
+
             if self.route == "/api/ask/stream":
-                return self._sse(stream_answer(params["question"], hits, use_llm=params["llm"]))
-            self._json(200, answer(params["question"], hits, use_llm=params["llm"]).to_dict())
+                events = stream_answer(question, hits, use_llm=params["llm"])
+                return self._sse((e, finish(d) if e == "done" else d) for e, d in events)
+            self._json(200, finish(answer(question, hits, use_llm=params["llm"]).to_dict()))
 
         def log_message(self, fmt, *args):  # quieter, single-line access log
             print(f"{self.address_string()} {fmt % args}")

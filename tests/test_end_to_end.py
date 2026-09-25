@@ -378,7 +378,8 @@ class ServerTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
             events = self.stream({"question": "How often are backups taken?"})
         self.assertEqual([d for e, d in events if e == "delta"], ["Backups run ", "every 6 hours [1]."])
-        self.assertEqual(events[-1], ("done", {"mode": "claude", "warning": None}))
+        self.assertEqual(events[-1], ("done", {"mode": "claude", "warning": None,
+                                               "question": "How often are backups taken?"}))
 
     def test_multi_query_uses_claude_rewrites(self):
         from tests.test_generate import FakeAnthropic, response
@@ -390,6 +391,22 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(fake.calls[0]["messages"][0]["content"], "How often are backups taken?")
         self.assertIn("api-reference.html", {s["source"] for s in body["sources"]})  # not in the plain top 3
+
+    def test_history_condenses_follow_ups(self):
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}):
+            status, body = self.post({"question": "How long are they kept?", "k": 3,
+                                      "history": ["How often are backups taken on hosted plans?"]})
+            events = self.stream({"question": "For how long?", "k": 3, "history": ["Can a deleted flag be restored?"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["question"], "How long are they kept? (often backups taken hosted plans)")
+        self.assertIn("retained for 35 days", body["answer"])
+        self.assertIn("restored for 30 days", "".join(d for e, d in events if e == "delta"))
+        self.assertEqual(events[-1][1]["question"], "For how long? (deleted flag restored)")
+
+    def test_history_is_validated(self):
+        for history in ("How often?", [1], ["x" * 2001]):
+            with self.subTest(history=history):
+                self.assertEqual(self.post({"question": "x", "history": history})[0], 400)
 
     def test_stream_validation(self):
         req = urllib.request.Request(self.base + "/api/ask/stream", data=b'{"question": ""}')
