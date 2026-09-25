@@ -1,4 +1,4 @@
-"""Command line interface: rag ingest | ask | eval | serve."""
+"""Command line interface: rag ingest | remove | ask | eval | serve."""
 
 from __future__ import annotations
 
@@ -47,6 +47,19 @@ def cmd_ingest(args) -> int:
                 print(f"  removed {source} (no longer in {target})")
         print(f"index {index.path}: {len(index.chunks)} chunks from {len(index.sources())} documents")
     return 0
+
+
+def cmd_remove(args) -> int:
+    with _open(args) as index:
+        targets = {t: index.find_sources(t, _origin(t)) for t in args.paths}
+        for target, found in targets.items():
+            if not found:
+                print(f"warning: nothing in the index matches {target}", file=sys.stderr)
+        removed = index.remove(sorted({s for found in targets.values() for s in found}))
+        for source in removed:
+            print(f"removed {source}")
+        print(f"index {index.path}: {len(index.chunks)} chunks from {len(index.sources())} documents")
+    return 0 if removed else 1
 
 
 def _require_chunks(index: Index) -> bool:
@@ -136,6 +149,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--chunk-size", type=int, default=800, help="max characters per chunk (default 800)")
     s.add_argument("--overlap", type=int, default=150, help="overlap characters between chunks (default 150)")
     s.set_defaults(func=cmd_ingest)
+
+    s = sub.add_parser("remove", help="remove documents from the index")
+    s.add_argument("paths", nargs="+",
+                   help="source name as shown by `rag stats`, a folder prefix, or an ingested file/folder path")
+    s.set_defaults(func=cmd_remove)
 
     s = sub.add_parser("ask", help="answer a question with citations")
     s.add_argument("question")

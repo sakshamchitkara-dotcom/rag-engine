@@ -68,6 +68,19 @@ class EndToEndTest(unittest.TestCase):
             self.assertEqual(ix.sources(), ["a.md", "c.md"])
             self.assertIn("daily", ix.search("alpha keys", k=1)[0].chunk.text)
 
+    def test_remove(self):
+        index = str(Path(self.tmp.name) / "remove.sqlite")
+        run("--index", index, "ingest", str(CORPUS))
+        code, out = run("--index", index, "remove", "pricing.md", str(CORPUS / "security.md"))
+        self.assertEqual(code, 0)
+        self.assertIn("removed pricing.md", out)
+        self.assertIn("removed security.md", out)
+        self.assertIn("from 7 documents", out)
+        self.assertEqual(run("--index", index, "remove", "pricing.md")[0], 1)  # already gone
+        code, out = run("--index", index, "remove", str(CORPUS))  # whole ingested folder
+        self.assertEqual(code, 0)
+        self.assertIn("0 chunks from 0 documents", out)
+
     def test_ask_json(self):
         code, out = run("--index", self.index_path, "ask", "What is the REST API rate limit?", "--json")
         self.assertEqual(code, 0)
