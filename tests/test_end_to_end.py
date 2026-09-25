@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import tempfile
 import threading
 import unittest
@@ -160,6 +161,20 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("--multi-query needs Claude", err.getvalue())
         self.assertIn("300 requests per minute", out.getvalue())
+
+    def test_chat_carries_context_to_follow_ups(self):
+        stdin = io.StringIO("How do I rotate an SDK key?\nDoes the old one keep working?\n/reset\n"
+                            "Does the old one keep working?\n/quit\nnever read\n")
+        with mock.patch("sys.stdin", stdin):
+            code, out = run("--index", self.index_path, "chat", "-k", "3")
+        self.assertEqual(code, 0)
+        turns = re.split(r"^> ", out, flags=re.M)[1:]
+        self.assertEqual(len(turns), 3)
+        self.assertIn("(as: Does the old one keep working? (rotate SDK key))", turns[1])
+        self.assertIn("24-hour grace period", turns[1])
+        self.assertIn("(new conversation)", turns[1])
+        self.assertNotIn("(as:", turns[2])  # history was reset
+        self.assertNotIn("never read", out)
 
     def test_ask_on_empty_index(self):
         empty = str(Path(self.tmp.name) / "empty.sqlite")
