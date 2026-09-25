@@ -1,4 +1,5 @@
 import builtins
+import io
 import importlib.util
 import tempfile
 import threading
@@ -88,6 +89,16 @@ class LoadPathTest(unittest.TestCase):
                 Path(tmp, "a.md").write_text("# A\n\nhello")
                 with mock.patch("sys.stderr"):
                     self.assertEqual([d.source for d in load_path(tmp)], ["a.md"])
+
+    def test_unreadable_file_is_skipped_not_fatal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "broken.pdf").write_bytes(b"garbage")
+            Path(tmp, "a.md").write_text("# A\n\nhello")
+            err = io.StringIO()
+            with mock.patch("rag_engine.loaders.pdf_to_text", side_effect=ValueError("stream ended")), \
+                    mock.patch("sys.stderr", err):
+                self.assertEqual([d.source for d in load_path(tmp)], ["a.md"])
+        self.assertIn("broken.pdf: ValueError: stream ended", err.getvalue())
 
     def test_loads_html_from_url(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_Quiet, directory=str(CORPUS)))
