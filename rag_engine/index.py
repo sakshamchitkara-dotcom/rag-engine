@@ -69,6 +69,7 @@ class IngestResult:
     updated: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)  # gone from the origin since the last ingest
+    conflicts: dict[str, str] = field(default_factory=dict)  # source -> origin that already owns it
     chunks: int = 0  # chunks written (unchanged documents write none)
 
 
@@ -137,12 +138,22 @@ class Index:
         tags documents already have. With
         `prune`, documents previously ingested from the same `origin` (e.g. a folder)
         that are not in `docs` any more are removed.
+
+        A document whose source name already belongs to a different file (say two
+        ingested folders that both hold README.md) is not stored; it is reported in
+        `conflicts` so the caller can re-ingest it under a prefix.
         """
         tag_text = None if tags is None else normalize_tags(tags)
         kept_tags = dict(self.db.execute("SELECT source, tags FROM documents"))
         stored = dict(self.db.execute("SELECT source, hash FROM documents"))
+        origins = dict(self.db.execute("SELECT source, origin FROM documents"))
         result, changed, hashes = IngestResult(), [], {}
         for doc in docs:
+            owner = origins.get(doc.source)
+            # Same file if the locations overlap: a folder origin plus the source name, or a file/URL origin.
+            if origin and owner and not ({origin, f"{origin}/{doc.source}"} & {owner, f"{owner}/{doc.source}"}):
+                result.conflicts[doc.source] = owner
+                continue
             hashes[doc.source] = content_hash(doc, max_chars, overlap)
             if stored.get(doc.source) == hashes[doc.source]:
                 result.unchanged.append(doc.source)
@@ -179,7 +190,7 @@ class Index:
         if docs:
             self._invalidate()  # chunks or tags changed
         if prune and origin:
-            keep = {d.source for d in docs}
+            keep = {d.source for d in docs} - set(result.conflicts)
             gone = [src for (src,) in self.db.execute("SELECT source FROM documents WHERE origin = ?", (origin,))
                     if src not in keep]
             result.removed = self.remove(gone)

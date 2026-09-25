@@ -8,6 +8,7 @@ import os
 import sqlite3
 import sys
 import urllib.error
+from dataclasses import replace
 from pathlib import Path
 
 from . import __version__
@@ -33,6 +34,8 @@ def cmd_ingest(args) -> int:
     batches = []
     for target in args.paths:
         loaded = load_path(target)
+        if args.prefix:
+            loaded = [replace(d, source=f"{args.prefix.strip('/')}/{d.source}") for d in loaded]
         if not loaded:
             print(f"warning: no supported documents found in {target}", file=sys.stderr)
         batches.append((target, loaded))
@@ -47,6 +50,9 @@ def cmd_ingest(args) -> int:
                   f"{len(r.removed)} removed -> {r.chunks} chunks written (embedder {index.embedder_name})")
             for source in r.removed:
                 print(f"  removed {source} (no longer in {target})")
+            for source, owner in r.conflicts.items():
+                print(f"warning: skipped {source}: that source name already belongs to {owner}; "
+                      f"re-run with --prefix NAME to index both", file=sys.stderr)
         print(f"index {index.path}: {len(index.chunks)} chunks from {len(index.sources())} documents")
     return 0
 
@@ -171,6 +177,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tag", action="append", default=[],
                    help="tag the ingested documents (repeatable), replacing their tags; without --tag "
                         "existing tags are kept. Filter with `rag ask --tag`")
+    s.add_argument("--prefix", default="",
+                   help="prepend NAME/ to the source names of this run, e.g. to ingest two folders that "
+                        "both contain README.md")
     s.add_argument("--embedder", default=None, help="'hash[:dim]' (default hash:1024) or 'st:<model>'")
     s.add_argument("--chunk-size", type=int, default=800, help="max characters per chunk (default 800)")
     s.add_argument("--overlap", type=int, default=150, help="overlap characters between chunks (default 150)")
