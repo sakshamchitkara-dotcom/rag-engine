@@ -404,6 +404,15 @@ class ServerTest(unittest.TestCase):
             events = self.stream({"question": "backups?"})
         self.assertEqual(events, [("sources", []), ("error", {"error": "internal error"})])
 
+    def test_routes_ignore_query_strings(self):
+        with urllib.request.urlopen(self.base + "/?utm_source=x") as resp:
+            self.assertIn(b"<title>rag-engine</title>", resp.read())
+        with urllib.request.urlopen(self.base + "/api/health?probe=1") as resp:
+            self.assertEqual(json.loads(resp.read())["sources"], 9)
+        req = urllib.request.Request(self.base + "/api/ask?debug=1", data=b'{"question": "How often are backups taken?"}')
+        with urllib.request.urlopen(req) as resp:
+            self.assertIn("every 6 hours", json.loads(resp.read())["answer"])
+
     def test_unknown_route(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(self.base + "/nope")
