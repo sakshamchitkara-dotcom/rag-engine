@@ -155,6 +155,16 @@ class IndexTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             Index(self.path, embedder="hash:256")
 
+    def test_sees_documents_ingested_by_another_connection(self):
+        serving = Index(self.path)
+        serving.add_documents(DOCS[:1])
+        self.assertEqual(len({h.chunk.source for h in serving.search("requests minute", k=10)}), 1)
+        with Index(self.path) as writer:  # e.g. `rag ingest` while `rag serve` is running
+            writer.add_documents(DOCS)
+        self.assertEqual(serving.sources(), sorted(d.source for d in DOCS))
+        self.assertEqual({c.source for c in serving.chunks}, {d.source for d in DOCS})
+        serving.close()
+
     def test_bad_mode_and_blank_query(self):
         ix = Index(self.path)
         ix.add_documents(DOCS)
