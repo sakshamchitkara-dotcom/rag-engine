@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterator
 
+from .chunking import is_table
 from .index import Hit
 from .text import split_sentences, tokenize
 
@@ -81,6 +82,26 @@ def _merge_fragments(sentences: list[str]) -> list[str]:
     return out
 
 
+def _cells(row: str) -> list[str]:
+    return [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", row.strip().strip("|"))]
+
+
+def table_rows(table: str) -> tuple[list[str], list[tuple[str, str]]]:
+    """(header cells, [(row sentence, row values)]) of a Markdown table.
+
+    '| Team | $25 |' under '| Plan | Price |' reads 'Plan: Team; Price: $25'.
+    """
+    lines = table.splitlines()
+    if len(lines) < 3 or set(lines[1].replace("|", "").strip()) - set(":- "):
+        return [], [(" ".join(_cells(line)),) * 2 for line in lines]  # no header row
+    header = _cells(lines[0])
+    rows = []
+    for line in lines[2:]:
+        cells = _cells(line)
+        rows.append(("; ".join(f"{h}: {c}" if h else c for h, c in zip(header, cells) if c), " ".join(cells)))
+    return header, rows
+
+
 def extractive_answer(question: str, hits: list[Hit], max_sentences: int = 3) -> str:
     """Pick the retrieved sentences that best cover the query terms, each with its citation."""
     q_terms = set(tokenize(question))
@@ -92,11 +113,22 @@ def extractive_answer(question: str, hits: list[Hit], max_sentences: int = 3) ->
         # "300 requests per minute"), so heading terms count at a discount.
         heading = set(tokenize(h.chunk.heading.rsplit(" > ", 1)[-1]))
         for para in h.chunk.text.split("\n\n"):
-            if para.lstrip().startswith(("```", "|")):
-                continue  # code blocks and tables make poor answer sentences
+            if para.lstrip().startswith("```"):
+                continue  # code blocks make poor answer sentences
             lines = para.splitlines()
-            units = ([ln.lstrip("-* ").strip() for ln in lines]
-                     if all(ln.lstrip().startswith(("- ", "* ")) for ln in lines) else [para])
+            if is_table(para):
+                # Column names repeat on every row, so like the heading they only count
+                # at a discount; a row must match the question in its own cells.
+                header, rows = table_rows(para)
+                header_terms = heading | set(tokenize(" ".join(header)))
+                for row, values in rows:
+                    if q_terms & set(tokenize(values)):
+                        candidates.append((row, n, set(tokenize(values)), header_terms))
+                continue
+            if all(ln.lstrip().startswith(("- ", "* ")) for ln in lines):
+                units = [ln.lstrip("-* ").strip() for ln in lines]
+            else:
+                units = [para]
             for unit in units:
                 for sentence in _merge_fragments(split_sentences(re.sub(r"\*\*|__", "", unit))):
                     candidates.append((sentence, n, set(tokenize(sentence)), heading))
