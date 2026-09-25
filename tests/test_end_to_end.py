@@ -228,6 +228,13 @@ class EndToEndTest(unittest.TestCase):
         self.assertGreaterEqual(report.recall_at(5), 0.9)
         self.assertGreaterEqual(report.mrr, 0.85)
 
+    def test_eval_rejects_bad_question_files(self):
+        for content in ("[]", '[{"question": "q?", "source": "a.md"}]'):
+            path = Path(self.tmp.name) / "q.json"
+            path.write_text(content)
+            with self.subTest(content=content):
+                self.assertEqual(run("--index", self.index_path, "eval", "--questions", str(path))[0], 2)
+
     def test_eval_rejects_unknown_mode(self):
         code, _ = run("--index", self.index_path, "eval", "--questions", str(QUESTIONS), "--modes", "hybrid+magic")
         self.assertEqual(code, 2)
@@ -359,6 +366,30 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.post(b"not json")[0], 400)
         self.assertEqual(self.post(["list"])[0], 400)
         self.assertEqual(self.post({"question": "x" * 3000})[0], 400)
+
+    def test_bad_content_length(self):
+        import http.client
+
+        for length, status in (("abc", 400), ("0", 400), (str(10**6), 413)):
+            conn = http.client.HTTPConnection("127.0.0.1", self.server.server_port)
+            conn.putrequest("POST", "/api/ask")
+            conn.putheader("Content-Length", length)
+            conn.endheaders()
+            resp = conn.getresponse()
+            with self.subTest(length=length):
+                self.assertEqual(resp.status, status)
+                self.assertIn("error", json.loads(resp.read()))
+            conn.close()
+
+    def test_stream_failure_after_headers_is_an_error_event(self):
+        def broken(*args, **kwargs):
+            yield "sources", []
+            raise ValueError("boom")
+
+        with mock.patch("rag_engine.server.stream_answer", broken), mock.patch.object(
+                self.server.RequestHandlerClass, "log_error", lambda *a: None):
+            events = self.stream({"question": "backups?"})
+        self.assertEqual(events, [("sources", []), ("error", {"error": "internal error"})])
 
     def test_unknown_route(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
