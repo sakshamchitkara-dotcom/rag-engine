@@ -17,6 +17,7 @@ from .generate import answer, cited_numbers
 from .index import MODES, Index
 from .loaders import load_path
 from .rerank import RERANKERS
+from .rewrite import multi_search, rewrite_queries
 
 DEFAULT_INDEX = os.environ.get("RAG_INDEX", ".rag/index.sqlite")
 DEFAULT_QUESTIONS = "examples/eval_questions.json"
@@ -131,16 +132,24 @@ def cmd_ask(args) -> int:
 def _ask(args, index: Index) -> int:
     if not _require_chunks(index):
         return 1
-    hits = index.search(args.question, k=args.k, mode=args.mode, rerank=args.rerank,
+    queries, rewrite_warning = [args.question], None
+    if args.multi_query:
+        queries, rewrite_warning = rewrite_queries(args.question, use_llm=not args.no_llm)
+        if len(queries) == 1 and not rewrite_warning:
+            rewrite_warning = "--multi-query needs Claude (ANTHROPIC_API_KEY); searched the question as written"
+    hits = multi_search(index, queries, k=args.k, mode=args.mode, rerank=args.rerank,
                         sources=args.source, tags=args.tag)
     if not hits and (args.source or args.tag):
         print("warning: no indexed chunks match the --source/--tag filters", file=sys.stderr)
     result = answer(args.question, hits, use_llm=not args.no_llm)
     if args.json:
-        print(json.dumps(result.to_dict(), indent=2))
+        print(json.dumps({**result.to_dict(), "queries": queries}, indent=2))
         return 0
-    if result.warning:
-        print(f"warning: {result.warning}", file=sys.stderr, flush=True)
+    for warning in (rewrite_warning, result.warning):
+        if warning:
+            print(f"warning: {warning}", file=sys.stderr, flush=True)
+    if len(queries) > 1:
+        print("searched: " + " | ".join(queries) + "\n")
     print(result.text)
     cited = set(cited_numbers(result.text))
     print("\nSources:")
@@ -235,6 +244,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="only search documents whose source matches this glob, e.g. 'api-*' (repeatable: any)")
     s.add_argument("--tag", action="append", default=[],
                    help="only search documents with this ingest tag (repeatable: any)")
+    s.add_argument("--multi-query", action="store_true",
+                   help="have Claude rewrite the question into up to 3 extra search queries and fuse the results")
     s.add_argument("--no-llm", action="store_true", help="skip Claude; use the extractive answerer")
     s.add_argument("--json", action="store_true", help="print the full result as JSON")
     s.set_defaults(func=cmd_ask)
@@ -243,7 +254,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--questions", default=DEFAULT_QUESTIONS, help=f"question file (default {DEFAULT_QUESTIONS})")
     s.add_argument("--k", type=_cutoffs, default=(1, 3, 5), help="comma-separated cutoffs (default 1,3,5)")
     s.add_argument("--modes", default=",".join(DEFAULT_MODES),
-                   help="comma-separated retrievers to compare; add +proximity or +mmr to rerank "
+                   help="comma-separated retrievers to compare; add +proximity or +mmr to rerank, "
+                        "+multi for Claude multi-query "
                         f"(default {','.join(DEFAULT_MODES)})")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_eval)

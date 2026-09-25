@@ -1,7 +1,7 @@
 """Retrieval and answer evaluation over a labelled question set.
 
 Retrieval: recall@k, MRR and top-k diversity per retriever, optionally reranked
-('hybrid+proximity'). Answers: how often the offline extractive
+('hybrid+proximity') and/or with Claude multi-query retrieval ('hybrid+multi'). Answers: how often the offline extractive
 answer contains the labelled phrase, and how much of it is padding.
 
 Question file format (JSON list):
@@ -19,9 +19,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .generate import NO_ANSWER, extractive_answer
+from .generate import NO_ANSWER, claude_available, extractive_answer
 from .index import MODES, Index
 from .rerank import RERANKERS
+from .rewrite import multi_search, rewrite_queries
 
 DEFAULT_MODES = (*MODES, *(f"hybrid+{r}" for r in RERANKERS))
 
@@ -75,23 +76,38 @@ def is_relevant(chunk, label: dict) -> bool:
     return chunk.source == label["source"] and label["contains"].lower() in chunk.text.lower()
 
 
-def parse_mode(spec: str) -> tuple[str, str | None]:
-    """'hybrid' -> ('hybrid', None); 'hybrid+mmr' -> ('hybrid', 'mmr')."""
-    mode, _, rerank = spec.partition("+")
-    if mode not in MODES or (rerank and rerank not in RERANKERS):
-        raise ValueError(f"unknown mode {spec!r}; use one of {MODES}, optionally +{'/+'.join(RERANKERS)}")
-    return mode, rerank or None
+def parse_mode(spec: str) -> tuple[str, str | None, bool]:
+    """'hybrid' -> ('hybrid', None, False); 'hybrid+mmr+multi' -> ('hybrid', 'mmr', True).
+
+    '+multi' fuses searches for Claude's rewrites of the question (needs Claude).
+    """
+    mode, *extras = spec.split("+")
+    multi = "multi" in extras
+    extras = [e for e in extras if e != "multi"]
+    if mode not in MODES or len(extras) > 1 or (extras and extras[0] not in RERANKERS):
+        raise ValueError(f"unknown mode {spec!r}; use one of {MODES}, optionally +{'/+'.join(RERANKERS)} "
+                         "and/or +multi")
+    if multi and not claude_available():
+        raise ValueError(f"{spec!r} needs Claude to rewrite queries: set ANTHROPIC_API_KEY "
+                         "and install the claude extra")
+    return mode, extras[0] if extras else None, multi
+
+
+def _retrieve(index: Index, question: str, k: int, spec: tuple[str, str | None, bool]):
+    mode, rerank, multi = spec
+    queries = rewrite_queries(question)[0] if multi else [question]
+    return multi_search(index, queries, k=k, mode=mode, rerank=rerank)
 
 
 def evaluate(index: Index, questions: list[dict], ks=(1, 3, 5), modes=DEFAULT_MODES) -> list[ModeReport]:
     """One report per mode spec, e.g. 'bm25' or 'hybrid+proximity' (retriever + reranker)."""
     depth = max(ks)
-    parsed = [(spec, *parse_mode(spec)) for spec in modes]  # validate before doing any work
+    parsed = [(spec, parse_mode(spec)) for spec in modes]  # validate before doing any work
     reports = []
-    for spec, mode, rerank in parsed:
+    for spec, parts in parsed:
         results = []
         for q in questions:
-            hits = index.search(q["question"], k=depth, mode=mode, rerank=rerank)
+            hits = _retrieve(index, q["question"], depth, parts)
             rank = next((i for i, h in enumerate(hits, 1) if is_relevant(h.chunk, q)), None)
             results.append(QuestionResult(q["question"], rank, len({h.chunk.source for h in hits})))
         reports.append(ModeReport(spec, tuple(ks), results))
@@ -140,10 +156,10 @@ class AnswerReport:
 
 def evaluate_answers(index: Index, questions: list[dict], k: int = 5, mode: str = "hybrid") -> AnswerReport:
     """Score the extractive answerer (deterministic and offline, unlike Claude) on top-k hits."""
-    retriever, rerank = parse_mode(mode)
+    parts = parse_mode(mode)
     results = []
     for q in questions:
-        hits = index.search(q["question"], k=k, mode=retriever, rerank=rerank)
+        hits = _retrieve(index, q["question"], k, parts)
         text = extractive_answer(q["question"], hits)
         cited = [] if text == NO_ANSWER else [int(n) for _, n in _CITED_SENTENCE.findall(text)]
         on_target = sum(1 <= n <= len(hits) and is_relevant(hits[n - 1].chunk, q) for n in cited)

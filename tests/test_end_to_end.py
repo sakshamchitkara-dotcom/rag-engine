@@ -151,6 +151,14 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual({s["source"] for s in json.loads(out)["sources"]}, {"troubleshooting.txt"})
 
+    def test_ask_multi_query_offline_warns_and_searches_as_written(self):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(err):
+            code = main(["--index", self.index_path, "ask", "What is the REST API rate limit?", "--multi-query"])
+        self.assertEqual(code, 0)
+        self.assertIn("--multi-query needs Claude", err.getvalue())
+        self.assertIn("300 requests per minute", out.getvalue())
+
     def test_ask_on_empty_index(self):
         code, _ = run("--index", str(Path(self.tmp.name) / "empty.sqlite"), "ask", "anything")
         self.assertEqual(code, 1)
@@ -310,6 +318,17 @@ class ServerTest(unittest.TestCase):
             events = self.stream({"question": "How often are backups taken?"})
         self.assertEqual([d for e, d in events if e == "delta"], ["Backups run ", "every 6 hours [1]."])
         self.assertEqual(events[-1], ("done", {"mode": "claude", "warning": None}))
+
+    def test_multi_query_uses_claude_rewrites(self):
+        from tests.test_generate import FakeAnthropic, response
+
+        fake = FakeAnthropic(response("hosted backup schedule\nrate limit per token"))
+        with mock.patch.dict("sys.modules", {"anthropic": fake}), \
+                mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
+            status, body = self.post({"question": "How often are backups taken?", "multi_query": True, "k": 3})
+        self.assertEqual(status, 200)
+        self.assertEqual(fake.calls[0]["messages"][0]["content"], "How often are backups taken?")
+        self.assertIn("api-reference.html", {s["source"] for s in body["sources"]})  # not in the plain top 3
 
     def test_stream_validation(self):
         req = urllib.request.Request(self.base + "/api/ask/stream", data=b'{"question": ""}')
