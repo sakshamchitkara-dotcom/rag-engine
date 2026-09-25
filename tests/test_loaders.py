@@ -9,6 +9,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
+from rag_engine import __version__
 from rag_engine.loaders import html_to_text, load_path, pdf_to_text, text_to_markdown
 
 CORPUS = Path(__file__).resolve().parent.parent / "examples" / "corpus"
@@ -103,6 +104,7 @@ class LoadPathTest(unittest.TestCase):
     def test_url_kind_comes_from_content_type_and_size_is_capped(self):
         class Handler(_Quiet):
             def do_GET(self):
+                agents.append(self.headers["User-Agent"])
                 body = b"Plain notes\n\nServed as text." if self.path == "/notes" else b"x" * 64
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain" if self.path == "/notes" else "application/pdf")
@@ -110,6 +112,7 @@ class LoadPathTest(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(body)
 
+        agents = []
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{server.server_port}"
@@ -119,6 +122,7 @@ class LoadPathTest(unittest.TestCase):
             with mock.patch("rag_engine.loaders.pdf_to_text", return_value="pdf text") as pdf:
                 [doc] = load_path(base + "/report")  # no suffix: application/pdf decides
             pdf.assert_called_once()
+            self.assertEqual(agents[0], f"rag-engine/{__version__}")
             with mock.patch("rag_engine.loaders.MAX_URL_BYTES", 10), self.assertRaises(ValueError):
                 load_path(base + "/report")
         finally:

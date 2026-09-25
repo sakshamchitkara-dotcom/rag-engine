@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
+from . import __version__
+
 SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt", ".html", ".htm", ".pdf"}
 MAX_URL_BYTES = 20 * 1024 * 1024
 
@@ -205,7 +207,7 @@ def load_file(path: Path, source: str | None = None) -> Document | None:
 
 
 def load_url(url: str, timeout: float = 20.0) -> Document | None:
-    req = urllib.request.Request(url, headers={"User-Agent": "rag-engine/0.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": f"rag-engine/{__version__}"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = resp.read(MAX_URL_BYTES + 1)
         ctype = resp.headers.get_content_type()
