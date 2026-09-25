@@ -12,6 +12,7 @@ from .evaluate import DEFAULT_MODES, evaluate, evaluate_answers, format_answer_t
 from .generate import answer, cited_numbers
 from .index import MODES, Index
 from .loaders import load_path
+from .rerank import RERANKERS
 
 DEFAULT_INDEX = os.environ.get("RAG_INDEX", ".rag/index.sqlite")
 DEFAULT_QUESTIONS = "examples/eval_questions.json"
@@ -53,7 +54,7 @@ def cmd_ask(args) -> int:
 def _ask(args, index: Index) -> int:
     if not _require_chunks(index):
         return 1
-    hits = index.search(args.question, k=args.k, mode=args.mode)
+    hits = index.search(args.question, k=args.k, mode=args.mode, rerank=args.rerank)
     result = answer(args.question, hits, use_llm=not args.no_llm)
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))
@@ -130,6 +131,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("question")
     s.add_argument("-k", type=int, default=5, help="chunks to retrieve (default 5)")
     s.add_argument("--mode", choices=MODES, default="hybrid")
+    s.add_argument("--rerank", choices=("none", *RERANKERS), default="none",
+                   help="rerank the top 20 candidates: proximity (query terms close together) or mmr (diversity)")
     s.add_argument("--no-llm", action="store_true", help="skip Claude; use the extractive answerer")
     s.add_argument("--json", action="store_true", help="print the full result as JSON")
     s.set_defaults(func=cmd_ask)
