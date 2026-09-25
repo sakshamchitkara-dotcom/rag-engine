@@ -1,6 +1,7 @@
 """Retrieval and answer evaluation over a labelled question set.
 
-Retrieval: recall@k and MRR per retriever. Answers: how often the offline extractive
+Retrieval: recall@k, MRR and top-k diversity per retriever, optionally reranked
+('hybrid+proximity'). Answers: how often the offline extractive
 answer contains the labelled phrase, and how much of it is padding.
 
 Question file format (JSON list):
@@ -20,12 +21,16 @@ from pathlib import Path
 
 from .generate import NO_ANSWER, extractive_answer
 from .index import MODES, Index
+from .rerank import RERANKERS
+
+DEFAULT_MODES = (*MODES, *(f"hybrid+{r}" for r in RERANKERS))
 
 
 @dataclass
 class QuestionResult:
     question: str
     rank: int | None  # 1-based rank of the first relevant chunk, None if not retrieved
+    sources: int = 0  # distinct documents in the retrieved top-k (diversity)
 
 
 @dataclass
@@ -41,11 +46,16 @@ class ModeReport:
     def mrr(self) -> float:
         return sum(1 / r.rank for r in self.results if r.rank) / len(self.results)
 
+    @property
+    def avg_sources(self) -> float:
+        return sum(r.sources for r in self.results) / len(self.results)
+
     def to_dict(self) -> dict:
         return {
             "mode": self.mode,
             **{f"recall@{k}": round(self.recall_at(k), 4) for k in self.ks},
             "mrr": round(self.mrr, 4),
+            "sources": round(self.avg_sources, 2),
             "misses": [r.question for r in self.results if r.rank is None],
         }
 
@@ -65,16 +75,26 @@ def is_relevant(chunk, label: dict) -> bool:
     return chunk.source == label["source"] and label["contains"].lower() in chunk.text.lower()
 
 
-def evaluate(index: Index, questions: list[dict], ks=(1, 3, 5), modes=MODES) -> list[ModeReport]:
+def parse_mode(spec: str) -> tuple[str, str | None]:
+    """'hybrid' -> ('hybrid', None); 'hybrid+mmr' -> ('hybrid', 'mmr')."""
+    mode, _, rerank = spec.partition("+")
+    if mode not in MODES or (rerank and rerank not in RERANKERS):
+        raise ValueError(f"unknown mode {spec!r}; use one of {MODES}, optionally +{'/+'.join(RERANKERS)}")
+    return mode, rerank or None
+
+
+def evaluate(index: Index, questions: list[dict], ks=(1, 3, 5), modes=DEFAULT_MODES) -> list[ModeReport]:
+    """One report per mode spec, e.g. 'bm25' or 'hybrid+proximity' (retriever + reranker)."""
     depth = max(ks)
+    parsed = [(spec, *parse_mode(spec)) for spec in modes]  # validate before doing any work
     reports = []
-    for mode in modes:
+    for spec, mode, rerank in parsed:
         results = []
         for q in questions:
-            hits = index.search(q["question"], k=depth, mode=mode)
+            hits = index.search(q["question"], k=depth, mode=mode, rerank=rerank)
             rank = next((i for i, h in enumerate(hits, 1) if is_relevant(h.chunk, q)), None)
-            results.append(QuestionResult(q["question"], rank))
-        reports.append(ModeReport(mode, tuple(ks), results))
+            results.append(QuestionResult(q["question"], rank, len({h.chunk.source for h in hits})))
+        reports.append(ModeReport(spec, tuple(ks), results))
     return reports
 
 
@@ -91,6 +111,7 @@ class AnswerResult:
 
 @dataclass
 class AnswerReport:
+    mode: str
     results: list[AnswerResult]
 
     @property
@@ -109,6 +130,7 @@ class AnswerReport:
 
     def to_dict(self) -> dict:
         return {
+            "mode": self.mode,
             "found": round(self.found_rate, 4),
             "precision": round(self.precision, 4),
             "avg_sentences": round(self.avg_sentences, 2),
@@ -117,21 +139,31 @@ class AnswerReport:
 
 
 def evaluate_answers(index: Index, questions: list[dict], k: int = 5, mode: str = "hybrid") -> AnswerReport:
-    """Score the extractive answerer (deterministic and offline, unlike Claude)."""
+    """Score the extractive answerer (deterministic and offline, unlike Claude) on top-k hits."""
+    retriever, rerank = parse_mode(mode)
     results = []
     for q in questions:
-        hits = index.search(q["question"], k=k, mode=mode)
+        hits = index.search(q["question"], k=k, mode=retriever, rerank=rerank)
         text = extractive_answer(q["question"], hits)
         cited = [] if text == NO_ANSWER else [int(n) for _, n in _CITED_SENTENCE.findall(text)]
         on_target = sum(1 <= n <= len(hits) and is_relevant(hits[n - 1].chunk, q) for n in cited)
         results.append(AnswerResult(q["question"], q["contains"].lower() in text.lower(), len(cited), on_target))
-    return AnswerReport(results)
+    return AnswerReport(mode, results)
 
 
 def format_table(reports: list[ModeReport]) -> str:
     ks = reports[0].ks
-    header = ["mode"] + [f"recall@{k}" for k in ks] + ["MRR"]
-    rows = [[r.mode] + [f"{r.recall_at(k):.3f}" for k in ks] + [f"{r.mrr:.3f}"] for r in reports]
+    header = ["mode"] + [f"recall@{k}" for k in ks] + ["MRR", f"docs@{max(ks)}"]
+    rows = [[r.mode] + [f"{r.recall_at(k):.3f}" for k in ks] + [f"{r.mrr:.3f}", f"{r.avg_sources:.2f}"]
+            for r in reports]
     widths = [max(len(row[i]) for row in [header] + rows) for i in range(len(header))]
-    line = lambda cells: "  ".join(c.ljust(w) for c, w in zip(cells, widths))  # noqa: E731
+    line = lambda cells: "  ".join(c.ljust(w) for c, w in zip(cells, widths)).rstrip()  # noqa: E731
+    return "\n".join([line(header), line(["-" * w for w in widths])] + [line(r) for r in rows])
+
+
+def format_answer_table(reports: list[AnswerReport]) -> str:
+    header = ["mode", "found", "precision", "sentences"]
+    rows = [[r.mode, f"{r.found_rate:.3f}", f"{r.precision:.3f}", f"{r.avg_sentences:.2f}"] for r in reports]
+    widths = [max(len(row[i]) for row in [header] + rows) for i in range(len(header))]
+    line = lambda cells: "  ".join(c.ljust(w) for c, w in zip(cells, widths)).rstrip()  # noqa: E731
     return "\n".join([line(header), line(["-" * w for w in widths])] + [line(r) for r in rows])

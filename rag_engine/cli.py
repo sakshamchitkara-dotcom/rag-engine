@@ -8,7 +8,7 @@ import os
 import sys
 
 from . import __version__
-from .evaluate import evaluate, evaluate_answers, format_table, load_questions
+from .evaluate import DEFAULT_MODES, evaluate, evaluate_answers, format_answer_table, format_table, load_questions
 from .generate import answer, cited_numbers
 from .index import MODES, Index
 from .loaders import load_path
@@ -80,10 +80,12 @@ def _eval(args, index: Index) -> int:
         return 1
     questions = load_questions(args.questions)
     ks = tuple(sorted({int(k) for k in args.k.split(",")}))
-    reports = evaluate(index, questions, ks=ks, modes=args.modes.split(","))
-    answers = evaluate_answers(index, questions)
+    modes = args.modes.split(",")
+    reports = evaluate(index, questions, ks=ks, modes=modes)
+    answers = [evaluate_answers(index, questions, k=5, mode=m) for m in modes]
     if args.json:
-        print(json.dumps({"retrieval": [r.to_dict() for r in reports], "answers": answers.to_dict()}, indent=2))
+        print(json.dumps({"retrieval": [r.to_dict() for r in reports],
+                          "answers": [a.to_dict() for a in answers]}, indent=2))
         return 0
     print(f"{len(questions)} questions, {len(index.chunks)} chunks\n")
     print(format_table(reports))
@@ -93,10 +95,10 @@ def _eval(args, index: Index) -> int:
             print(f"\n{r.mode} missed (not in top {max(ks)}):")
             for m in misses:
                 print(f"  - {m}")
-    print("\nAnswer quality (extractive answerer, hybrid top-5):")
-    print(f"  found      {answers.found_rate:.3f}  answer contains the labelled phrase")
-    print(f"  precision  {answers.precision:.3f}  answer sentences cited from an answer-bearing chunk")
-    print(f"  sentences  {answers.avg_sentences:.2f}  average per answer")
+    print("\nAnswer quality (extractive answerer over the top 5):")
+    print(format_answer_table(answers))
+    print("found = answer contains the labelled phrase; precision = share of answer sentences\n"
+          "cited from a chunk that holds the answer; sentences = average per answer")
     return 0
 
 
@@ -135,7 +137,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("eval", help="retrieval eval (recall@k, MRR) and extractive answer quality")
     s.add_argument("--questions", default=DEFAULT_QUESTIONS, help=f"question file (default {DEFAULT_QUESTIONS})")
     s.add_argument("--k", default="1,3,5", help="comma-separated cutoffs (default 1,3,5)")
-    s.add_argument("--modes", default=",".join(MODES), help="comma-separated retrievers to compare")
+    s.add_argument("--modes", default=",".join(DEFAULT_MODES),
+                   help="comma-separated retrievers to compare; add +proximity or +mmr to rerank "
+                        f"(default {','.join(DEFAULT_MODES)})")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_eval)
 

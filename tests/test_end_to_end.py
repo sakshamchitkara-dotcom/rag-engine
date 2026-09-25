@@ -86,8 +86,21 @@ class EndToEndTest(unittest.TestCase):
         code, out = run("--index", self.index_path, "eval", "--questions", str(QUESTIONS), "--json")
         self.assertEqual(code, 0)
         result = json.loads(out)
-        self.assertEqual([r["mode"] for r in result["retrieval"]], ["hybrid", "bm25", "dense"])
-        self.assertEqual(set(result["answers"]), {"found", "precision", "avg_sentences", "misses"})
+        modes = ["hybrid", "bm25", "dense", "hybrid+proximity", "hybrid+mmr"]
+        self.assertEqual([r["mode"] for r in result["retrieval"]], modes)
+        self.assertEqual([a["mode"] for a in result["answers"]], modes)
+        self.assertEqual(set(result["answers"][0]), {"mode", "found", "precision", "avg_sentences", "misses"})
+
+    def test_reranked_eval_quality_floor(self):
+        index = Index(self.index_path)
+        (report,) = evaluate(index, load_questions(QUESTIONS), modes=["hybrid+proximity"])
+        index.close()
+        self.assertGreaterEqual(report.recall_at(5), 0.9)
+        self.assertGreaterEqual(report.mrr, 0.85)
+
+    def test_eval_rejects_unknown_mode(self):
+        code, _ = run("--index", self.index_path, "eval", "--questions", str(QUESTIONS), "--modes", "hybrid+magic")
+        self.assertEqual(code, 2)
 
     def test_eval_cli(self):
         code, out = run("--index", self.index_path, "eval", "--questions", str(QUESTIONS))
