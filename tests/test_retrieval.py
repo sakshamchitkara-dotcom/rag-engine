@@ -101,7 +101,8 @@ class IndexTest(unittest.TestCase):
         ix = Index(self.path, embedder="hash:128")
         ix.add_documents(DOCS)
         ix.close()
-        self.assertEqual(Index(self.path).embedder_name, "hash:128")
+        with Index(self.path) as reopened:
+            self.assertEqual(reopened.embedder_name, "hash:128")
         with self.assertRaises(ValueError):
             Index(self.path, embedder="hash:256")
 

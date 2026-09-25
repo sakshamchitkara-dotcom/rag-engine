@@ -59,6 +59,7 @@ class Index:
         self.db.executescript(_SCHEMA)
         stored = self._meta("embedder")
         if stored and embedder and stored != embedder:
+            self.db.close()
             raise ValueError(
                 f"index at {self.path} was built with embedder {stored!r}; "
                 f"re-ingest with --reset to switch to {embedder!r}"
@@ -180,3 +181,9 @@ class Index:
 
     def close(self) -> None:
         self.db.close()
+
+    def __enter__(self) -> "Index":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
