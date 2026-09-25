@@ -12,6 +12,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
+from typing import Iterator
 
 from .index import Hit
 from .text import split_sentences, tokenize
@@ -150,11 +151,8 @@ def claude_available() -> bool:
     return True
 
 
-def claude_answer(question: str, hits: list[Hit], model: str = MODEL) -> str:
-    import anthropic
-
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
-    response = client.messages.create(
+def _request(question: str, hits: list[Hit], model: str) -> dict:
+    return dict(
         model=model,
         max_tokens=16000,
         # Claude Opus 5.5 always thinks; effort is the only dial. Grounded Q&A over a
@@ -163,6 +161,13 @@ def claude_answer(question: str, hits: list[Hit], model: str = MODEL) -> str:
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_prompt(question, hits)}],
     )
+
+
+def claude_answer(question: str, hits: list[Hit], model: str = MODEL) -> str:
+    import anthropic
+
+    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+    response = client.messages.create(**_request(question, hits, model))
     if response.stop_reason == "refusal":
         raise RuntimeError("Claude declined to answer this request")
     text = "".join(block.text for block in response.content if block.type == "text").strip()
@@ -171,27 +176,80 @@ def claude_answer(question: str, hits: list[Hit], model: str = MODEL) -> str:
     return text
 
 
+def claude_stream(question: str, hits: list[Hit], model: str = MODEL) -> Iterator[str]:
+    """Yield answer text deltas as Claude writes them (thinking is not streamed)."""
+    import anthropic
+
+    client = anthropic.Anthropic()
+    produced = False
+    with client.messages.stream(**_request(question, hits, model)) as stream:
+        for text in stream.text_stream:
+            produced = produced or bool(text.strip())
+            yield text
+        final = stream.get_final_message()
+    if final.stop_reason == "refusal":
+        raise RuntimeError("Claude declined to answer this request")
+    if not produced:
+        raise RuntimeError(f"Claude returned no text (stop_reason={final.stop_reason})")
+
+
+def _fallback_warning(exc: Exception) -> str | None:
+    """Warning for an LLM failure we recover from; None means re-raise."""
+    import anthropic
+
+    if isinstance(exc, anthropic.AuthenticationError):
+        return "ANTHROPIC_API_KEY was rejected; used extractive fallback"
+    if isinstance(exc, anthropic.RateLimitError):
+        return "Claude rate limit hit; used extractive fallback"
+    if isinstance(exc, anthropic.APIStatusError):
+        return f"Claude API error {exc.status_code}; used extractive fallback"
+    if isinstance(exc, anthropic.APIConnectionError):
+        return "could not reach the Claude API; used extractive fallback"
+    if isinstance(exc, RuntimeError):
+        return f"{exc}; used extractive fallback"
+    return None
+
+
 def answer(question: str, hits: list[Hit], *, use_llm: bool = True, model: str = MODEL) -> Answer:
     sources = _source_list(hits)
     if not hits:
         return Answer(NO_ANSWER, sources)
     warning = None
     if use_llm and claude_available():
-        import anthropic
-
         try:
             return Answer(claude_answer(question, hits, model), sources, mode="claude")
-        except anthropic.AuthenticationError:
-            warning = "ANTHROPIC_API_KEY was rejected; used extractive fallback"
-        except anthropic.RateLimitError:
-            warning = "Claude rate limit hit; used extractive fallback"
-        except anthropic.APIStatusError as exc:
-            warning = f"Claude API error {exc.status_code}; used extractive fallback"
-        except anthropic.APIConnectionError:
-            warning = "could not reach the Claude API; used extractive fallback"
-        except RuntimeError as exc:
-            warning = f"{exc}; used extractive fallback"
+        except Exception as exc:
+            warning = _fallback_warning(exc)
+            if warning is None:
+                raise
     return Answer(extractive_answer(question, hits), sources, mode="extractive", warning=warning)
+
+
+def stream_answer(question: str, hits: list[Hit], *, use_llm: bool = True,
+                  model: str = MODEL) -> Iterator[tuple[str, object]]:
+    """Answer as a sequence of (event, data) pairs for streaming clients:
+
+    ("sources", [...]) first, then ("delta", text) pieces, then ("done", {"mode", "warning"}).
+    If Claude fails after text was already sent, ("replace", text) carries the complete
+    extractive answer that supersedes the partial one. Without Claude the extractive
+    answer arrives as a single delta.
+    """
+    yield "sources", _source_list(hits)
+    warning, sent = None, False
+    if hits and use_llm and claude_available():
+        try:
+            for text in claude_stream(question, hits, model):
+                sent = True
+                yield "delta", text
+            yield "done", {"mode": "claude", "warning": None}
+            return
+        except Exception as exc:
+            warning = _fallback_warning(exc)
+            if warning is None:
+                raise
+    text = extractive_answer(question, hits) if hits else NO_ANSWER
+    yield ("replace" if sent else "delta"), text
+    yield "done", {"mode": "extractive", "warning": warning}
 
 
 def cited_numbers(text: str) -> list[int]:

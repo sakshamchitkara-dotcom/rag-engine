@@ -79,10 +79,27 @@ class FakeAnthropic(types.ModuleType):
     class APIConnectionError(Exception):
         pass
 
-    def __init__(self, response=None, error=None):
+    def __init__(self, response=None, error=None, deltas=(), stream_error=None):
         super().__init__("anthropic")
         self.calls = []
         fake = self
+
+        class Stream:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            @property
+            def text_stream(self):
+                for d in deltas:
+                    yield d
+                if stream_error:
+                    raise stream_error
+
+            def get_final_message(self):
+                return response
 
         class Messages:
             def create(self, **kwargs):
@@ -90,6 +107,12 @@ class FakeAnthropic(types.ModuleType):
                 if error:
                     raise error
                 return response
+
+            def stream(self, **kwargs):
+                fake.calls.append(kwargs)
+                if error:
+                    raise error
+                return Stream()
 
         class Anthropic:
             def __init__(self):
@@ -148,6 +171,46 @@ class ClaudePathTest(unittest.TestCase):
             result = generate.answer("requests per minute", HITS, use_llm=False)
         self.assertEqual(result.mode, "extractive")
         self.assertEqual(fake.calls, [])
+
+
+class StreamAnswerTest(unittest.TestCase):
+    def events(self, fake, key="sk-test", hits=HITS):
+        env = {"ANTHROPIC_API_KEY": key} if key else {}
+        with mock.patch.dict(sys.modules, {"anthropic": fake}), mock.patch.dict("os.environ", env, clear=True):
+            return list(generate.stream_answer("How many requests per minute?", hits))
+
+    def test_streams_claude_deltas(self):
+        fake = FakeAnthropic(response("", stop_reason="end_turn"), deltas=["The API allows ", "300 [1]."])
+        events = self.events(fake)
+        self.assertEqual(events[0][0], "sources")
+        self.assertEqual([d for e, d in events if e == "delta"], ["The API allows ", "300 [1]."])
+        self.assertEqual(events[-1], ("done", {"mode": "claude", "warning": None}))
+        self.assertIn("effort", fake.calls[0]["output_config"])
+
+    def test_error_before_any_text_falls_back_to_extractive_delta(self):
+        events = self.events(FakeAnthropic(error=FakeAnthropic.APIConnectionError()))
+        kinds = [e for e, _ in events]
+        self.assertEqual(kinds, ["sources", "delta", "done"])
+        self.assertIn("300 requests per minute", events[1][1])
+        self.assertEqual(events[-1][1]["mode"], "extractive")
+        self.assertIn("could not reach", events[-1][1]["warning"])
+
+    def test_error_mid_stream_replaces_partial_text(self):
+        fake = FakeAnthropic(response(""), deltas=["The API "], stream_error=FakeAnthropic.RateLimitError())
+        kinds = [e for e, _ in self.events(fake)]
+        self.assertEqual(kinds, ["sources", "delta", "replace", "done"])
+
+    def test_refusal_after_stream_replaces(self):
+        fake = FakeAnthropic(response("", stop_reason="refusal"), deltas=["I can't"])
+        events = self.events(fake)
+        self.assertEqual(events[-2][0], "replace")
+        self.assertIn("declined", events[-1][1]["warning"])
+
+    def test_offline_and_empty(self):
+        events = self.events(FakeAnthropic(response("unused")), key=None)
+        self.assertEqual([e for e, _ in events], ["sources", "delta", "done"])
+        self.assertIsNone(events[-1][1]["warning"])
+        self.assertEqual(self.events(FakeAnthropic(), key=None, hits=[])[1], ("delta", generate.NO_ANSWER))
 
 
 if __name__ == "__main__":
