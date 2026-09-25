@@ -39,9 +39,12 @@ def cmd_ingest(args) -> int:
             index.reset()
     with _open(args, args.embedder) as index:
         for target, docs in batches:
-            r = index.add_documents(docs, max_chars=args.chunk_size, overlap=args.overlap, origin=_origin(target))
-            print(f"{target}: {len(r.added)} added, {len(r.updated)} updated, {len(r.unchanged)} unchanged "
-                  f"-> {r.chunks} chunks written (embedder {index.embedder_name})")
+            r = index.add_documents(docs, max_chars=args.chunk_size, overlap=args.overlap,
+                                    origin=_origin(target), prune=Path(target).is_dir())
+            print(f"{target}: {len(r.added)} added, {len(r.updated)} updated, {len(r.unchanged)} unchanged, "
+                  f"{len(r.removed)} removed -> {r.chunks} chunks written (embedder {index.embedder_name})")
+            for source in r.removed:
+                print(f"  removed {source} (no longer in {target})")
         print(f"index {index.path}: {len(index.chunks)} chunks from {len(index.sources())} documents")
     return 0
 
