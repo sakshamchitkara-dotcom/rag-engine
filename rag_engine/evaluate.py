@@ -10,6 +10,11 @@ answer contains the labelled phrase, and how much of it is padding.
 Question file format (JSON list):
     [{"question": "...", "source": "pricing.md", "contains": "20% discount"}, ...]
 
+A question may carry "history", the earlier questions of a conversation (oldest
+first); it is then condensed into a standalone question before it is searched, as
+`rag chat` does. Retrieval and extractive answers use the offline heuristic so the
+numbers stay deterministic; `--judge` uses Claude when it answers with Claude.
+
 A retrieved chunk is relevant when it comes from `source` and its text contains the
 `contains` phrase (case-insensitive). Labelling by phrase rather than chunk id keeps
 the labels valid when chunking parameters change.
@@ -23,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .generate import NO_ANSWER, _fallback_warning, answer, claude_available, claude_complete, extractive_answer
+from .conversation import condense
 from .index import MODES, Index
 from .rerank import RERANKERS
 from .rewrite import multi_search, rewrite_queries
@@ -71,9 +77,17 @@ def load_questions(path: str | Path) -> list[dict]:
         missing = {"question", "source", "contains"} - q.keys()
         if missing:
             raise ValueError(f"question {q!r} is missing {sorted(missing)}")
+        history = q.get("history", [])
+        if not isinstance(history, list) or not all(isinstance(h, str) for h in history):
+            raise ValueError(f"question {q['question']!r}: 'history' must be a list of strings")
     if not questions:
         raise ValueError(f"{path} contains no questions")
     return questions
+
+
+def standalone(q: dict, use_llm: bool = False) -> str:
+    """The question to search and answer: condensed with its conversation history, if any."""
+    return condense(q["question"], q.get("history", []), use_llm=use_llm)[0]
 
 
 def is_relevant(chunk, label: dict) -> bool:
@@ -111,7 +125,7 @@ def evaluate(index: Index, questions: list[dict], ks=(1, 3, 5), modes=DEFAULT_MO
     for spec, parts in parsed:
         results = []
         for q in questions:
-            hits = _retrieve(index, q["question"], depth, parts)
+            hits = _retrieve(index, standalone(q), depth, parts)
             rank = next((i for i, h in enumerate(hits, 1) if is_relevant(h.chunk, q)), None)
             results.append(QuestionResult(q["question"], rank, len({h.chunk.source for h in hits})))
         reports.append(ModeReport(spec, tuple(ks), results))
@@ -163,8 +177,9 @@ def evaluate_answers(index: Index, questions: list[dict], k: int = 5, mode: str 
     parts = parse_mode(mode)
     results = []
     for q in questions:
-        hits = _retrieve(index, q["question"], k, parts)
-        text = extractive_answer(q["question"], hits)
+        query = standalone(q)
+        hits = _retrieve(index, query, k, parts)
+        text = extractive_answer(query, hits)
         cited = [] if text == NO_ANSWER else [int(n) for _, n in _CITED_SENTENCE.findall(text)]
         on_target = sum(1 <= n <= len(hits) and is_relevant(hits[n - 1].chunk, q) for n in cited)
         results.append(AnswerResult(q["question"], q["contains"].lower() in text.lower(), len(cited), on_target))
@@ -262,13 +277,14 @@ def judge_answers(index: Index, questions: list[dict], k: int = 5, mode: str = "
     llm = use_llm and claude_available()
     results, modes = [], set()
     for q in questions:
-        hits = _retrieve(index, q["question"], k, parts)
-        result = answer(q["question"], hits, use_llm=llm)
+        query = standalone(q, use_llm=llm)
+        hits = _retrieve(index, query, k, parts)
+        result = answer(query, hits, use_llm=llm)
         modes.add(result.mode)
         verdict, judge = None, "heuristic"
         if llm:
             try:
-                verdict, judge = claude_judgement(q["question"], q, result.text, result.sources), "claude"
+                verdict, judge = claude_judgement(query, q, result.text, result.sources), "claude"
             except Exception as exc:
                 if _fallback_warning(exc) is None and not isinstance(exc, ValueError):
                     raise

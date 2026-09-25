@@ -22,6 +22,7 @@ from rag_engine.server import make_handler
 ROOT = Path(__file__).resolve().parent.parent
 CORPUS = ROOT / "examples" / "corpus"
 QUESTIONS = ROOT / "examples" / "eval_questions.json"
+FOLLOWUPS = ROOT / "examples" / "eval_followups.json"
 
 
 def run(*argv):
@@ -240,8 +241,22 @@ class EndToEndTest(unittest.TestCase):
         self.assertGreaterEqual(report.recall_at(5), 0.9)
         self.assertGreaterEqual(report.mrr, 0.85)
 
+    def test_follow_up_eval_condenses_history(self):
+        index = Index(self.index_path)
+        questions = load_questions(FOLLOWUPS)
+        (report,) = evaluate(index, questions, modes=["hybrid"])
+        (as_written,) = evaluate(index, [{k: v for k, v in q.items() if k != "history"} for q in questions],
+                                 modes=["hybrid"])
+        answers = evaluate_answers(index, questions)
+        index.close()
+        self.assertEqual(report.recall_at(5), 1.0)
+        self.assertGreaterEqual(report.mrr, 0.9)
+        self.assertLess(as_written.recall_at(5), 0.8)  # the follow-ups alone are ambiguous
+        self.assertGreaterEqual(answers.found_rate, 0.9)
+
     def test_eval_rejects_bad_question_files(self):
-        for content in ("[]", '[{"question": "q?", "source": "a.md"}]'):
+        for content in ("[]", '[{"question": "q?", "source": "a.md"}]',
+                        '[{"question": "q?", "source": "a.md", "contains": "x", "history": "not a list"}]'):
             path = Path(self.tmp.name) / "q.json"
             path.write_text(content)
             with self.subTest(content=content):

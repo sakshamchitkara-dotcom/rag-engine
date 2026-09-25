@@ -1,0 +1,14 @@
+[
+  {"history": ["What is the REST API rate limit?"], "question": "What happens when I go over it?", "source": "api-reference.html", "contains": "HTTP 429"},
+  {"history": ["What is the REST API rate limit?", "What happens when I go over it?"], "question": "How long should I wait?", "source": "api-reference.html", "contains": "Retry-After"},
+  {"history": ["How much does the Team plan cost?"], "question": "And how many seats does it allow?", "source": "pricing.md", "contains": "Up to 50"},
+  {"history": ["How do I rotate an SDK key?"], "question": "Does the old one keep working?", "source": "troubleshooting.txt", "contains": "24-hour grace period"},
+  {"history": ["How often are backups taken on hosted plans?"], "question": "How long are they kept?", "source": "security.md", "contains": "retained for 35 days"},
+  {"history": ["What is the minimum PostgreSQL version?"], "question": "Is Redis needed too?", "source": "installation.md", "contains": "Redis is not required"},
+  {"history": ["What does the Enterprise plan include?"], "question": "What uptime does it guarantee?", "source": "pricing.md", "contains": "99.95%"},
+  {"history": ["How do I turn off streaming?"], "question": "How often do SDKs poll then?", "source": "configuration.md", "contains": "poll every 30 seconds"},
+  {"history": ["Can a deleted flag be restored?"], "question": "For how long?", "source": "api-reference.html", "contains": "restored for 30 days"},
+  {"history": ["Is there a free trial?"], "question": "How long is it?", "source": "pricing.md", "contains": "14-day free trial"},
+  {"history": ["What can a Writer role do?"], "question": "What about Admins?", "source": "security.md", "contains": "Admins can change production"},
+  {"history": ["How do I enable OIDC single sign-on?"], "question": "Which plans is it available on?", "source": "configuration.md", "contains": "Team and Enterprise plans only"}
+]
