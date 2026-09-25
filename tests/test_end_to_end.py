@@ -186,7 +186,7 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn("could not fetch URL", lines[1])
 
     def test_numeric_options_are_validated(self):
-        for argv in (["ask", "x", "-k", "0"], ["ask", "x", "-k", "-2"], ["eval", "--k", "1,a"],
+        for argv in (["ask", "  "], ["ask", "x", "-k", "0"], ["ask", "x", "-k", "-2"], ["eval", "--k", "1,a"],
                      ["serve", "--port", "70000"], ["ingest", str(CORPUS), "--chunk-size", "10"],
                      ["ingest", str(CORPUS), "--overlap", "-1"]):
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as err, \
