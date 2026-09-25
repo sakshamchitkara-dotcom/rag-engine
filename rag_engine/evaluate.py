@@ -1,4 +1,7 @@
-"""Retrieval evaluation: recall@k and MRR over a labelled question set.
+"""Retrieval and answer evaluation over a labelled question set.
+
+Retrieval: recall@k and MRR per retriever. Answers: how often the offline extractive
+answer contains the labelled phrase, and how much of it is padding.
 
 Question file format (JSON list):
     [{"question": "...", "source": "pricing.md", "contains": "20% discount"}, ...]
@@ -11,9 +14,11 @@ the labels valid when chunking parameters change.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .generate import NO_ANSWER, extractive_answer
 from .index import MODES, Index
 
 
@@ -71,6 +76,56 @@ def evaluate(index: Index, questions: list[dict], ks=(1, 3, 5), modes=MODES) -> 
             results.append(QuestionResult(q["question"], rank))
         reports.append(ModeReport(mode, tuple(ks), results))
     return reports
+
+
+_CITED_SENTENCE = re.compile(r"(.+?)\s\[(\d+)\](?:\s+|$)")
+
+
+@dataclass
+class AnswerResult:
+    question: str
+    found: bool  # the labelled phrase appears in the answer
+    sentences: int
+    on_target: int  # sentences cited from a chunk that holds the labelled answer
+
+
+@dataclass
+class AnswerReport:
+    results: list[AnswerResult]
+
+    @property
+    def found_rate(self) -> float:
+        return sum(r.found for r in self.results) / len(self.results)
+
+    @property
+    def precision(self) -> float:
+        """Share of all answer sentences that come from an answer-bearing chunk."""
+        total = sum(r.sentences for r in self.results)
+        return sum(r.on_target for r in self.results) / total if total else 0.0
+
+    @property
+    def avg_sentences(self) -> float:
+        return sum(r.sentences for r in self.results) / len(self.results)
+
+    def to_dict(self) -> dict:
+        return {
+            "found": round(self.found_rate, 4),
+            "precision": round(self.precision, 4),
+            "avg_sentences": round(self.avg_sentences, 2),
+            "misses": [r.question for r in self.results if not r.found],
+        }
+
+
+def evaluate_answers(index: Index, questions: list[dict], k: int = 5, mode: str = "hybrid") -> AnswerReport:
+    """Score the extractive answerer (deterministic and offline, unlike Claude)."""
+    results = []
+    for q in questions:
+        hits = index.search(q["question"], k=k, mode=mode)
+        text = extractive_answer(q["question"], hits)
+        cited = [] if text == NO_ANSWER else [int(n) for _, n in _CITED_SENTENCE.findall(text)]
+        on_target = sum(1 <= n <= len(hits) and is_relevant(hits[n - 1].chunk, q) for n in cited)
+        results.append(AnswerResult(q["question"], q["contains"].lower() in text.lower(), len(cited), on_target))
+    return AnswerReport(results)
 
 
 def format_table(reports: list[ModeReport]) -> str:
