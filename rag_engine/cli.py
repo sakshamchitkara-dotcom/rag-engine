@@ -1,4 +1,4 @@
-"""Command line interface: rag ingest | remove | stats | ask | eval | serve."""
+"""Command line interface: rag ingest | remove | stats | vacuum | ask | eval | serve."""
 
 from __future__ import annotations
 
@@ -108,6 +108,14 @@ def cmd_stats(args) -> int:
     return 0
 
 
+def cmd_vacuum(args) -> int:
+    with _open(args) as index:
+        before, after = index.vacuum()
+    print(f"index {args.index}: {before / 1024:.0f} KiB -> {after / 1024:.0f} KiB "
+          f"({(before - after) / 1024:.0f} KiB reclaimed)")
+    return 0
+
+
 def _require_chunks(index: Index) -> bool:
     if index.chunks:
         return True
@@ -213,6 +221,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("stats", help="show what the index contains")
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_stats)
+
+    s = sub.add_parser("vacuum", help="compact the index file after removing or re-ingesting documents")
+    s.set_defaults(func=cmd_vacuum)
 
     s = sub.add_parser("ask", help="answer a question with citations")
     s.add_argument("question")

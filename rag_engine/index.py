@@ -222,6 +222,13 @@ class Index:
             self._invalidate()
         return found
 
+    def vacuum(self) -> tuple[int, int]:
+        """Rebuild the SQLite file to return space freed by removed or re-ingested
+        documents; returns (bytes before, bytes after)."""
+        before = self.path.stat().st_size
+        self.db.execute("VACUUM")
+        return before, self.path.stat().st_size
+
     def _load(self) -> None:
         """Load chunks into memory, again whenever another connection (a `rag ingest`
         while `rag serve` runs) has committed changes since the last load."""

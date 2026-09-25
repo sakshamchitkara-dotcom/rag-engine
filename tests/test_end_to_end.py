@@ -101,6 +101,18 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("0 chunks from 0 documents", out)
 
+    def test_vacuum_reclaims_space_after_remove(self):
+        index = str(Path(self.tmp.name) / "vacuum.sqlite")
+        run("--index", index, "ingest", str(CORPUS))
+        run("--index", index, "remove", "api-reference.html", "changelog.md", "sdk-guide.md", "overview.md")
+        before = Path(index).stat().st_size
+        code, out = run("--index", index, "vacuum")
+        self.assertEqual(code, 0)
+        self.assertLess(Path(index).stat().st_size, before)
+        self.assertIn("KiB reclaimed", out)
+        _, out = run("--index", index, "ask", "How long is the free trial?")
+        self.assertIn("14-day free trial", out)
+
     def test_stats(self):
         code, out = run("--index", self.index_path, "stats", "--json")
         self.assertEqual(code, 0)
