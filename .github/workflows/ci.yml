@@ -43,6 +43,9 @@ jobs:
           rag eval --judge --modes hybrid,hybrid+proximity | tee eval.log
           grep -q "judged by heuristic" eval.log
           rag eval --questions examples/eval_compound.json --modes hybrid
+          printf 'How do I rotate an SDK key?\nDoes the old one keep working?\n' | rag chat | tee chat.log
+          grep -q "24-hour grace period" chat.log
+          rag eval --questions examples/eval_followups.json --modes hybrid
 
   pdf:
     runs-on: ubuntu-latest
