@@ -1,4 +1,5 @@
 import builtins
+import importlib.util
 import tempfile
 import threading
 import unittest
@@ -87,6 +88,39 @@ class LoadPathTest(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+
+def minimal_pdf(lines: list[str]) -> bytes:
+    """Build a one-page PDF with the given text lines (Helvetica), with a valid xref table."""
+    ops = "BT /F1 12 Tf 72 720 Td 14 TL " + " ".join(f"({ln}) Tj T*" for ln in lines) + " ET"
+    objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        "/Resources << /Font << /F1 5 0 R >> >> >>",
+        f"<< /Length {len(ops)} >>\nstream\n{ops}\nendstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = b"%PDF-1.4\n"
+    offsets = []
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{obj}\nendobj\n".encode()
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += "".join(f"{o:010d} 00000 n \n" for o in offsets).encode()
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return out
+
+
+@unittest.skipUnless(importlib.util.find_spec("pypdf"), "pypdf not installed")
+class PDFTest(unittest.TestCase):
+    def test_extracts_pdf_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "manual.pdf").write_bytes(minimal_pdf(["Beacon manual", "Relays cache flag rules."]))
+            [doc] = load_path(tmp)
+        self.assertEqual(doc.source, "manual.pdf")
+        self.assertIn("Relays cache flag rules.", doc.text)
 
 
 class _Quiet(SimpleHTTPRequestHandler):
