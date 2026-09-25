@@ -298,7 +298,11 @@ class Index:
         if not self._vectors:
             return []
         q = self.embedder.embed([query])[0]
-        scored = [(i, cosine(q, v)) for i, v in enumerate(self._vectors) if allowed is None or i in allowed]
+        # A query vector is sparse (a short query hashes into a few dozen of 1024 buckets),
+        # so the dot product only visits its non-zero dimensions. Same sums, same order.
+        nz = [(j, x) for j, x in enumerate(q) if x]
+        scored = [(i, sum(x * v[j] for j, x in nz)) for i, v in enumerate(self._vectors)
+                  if allowed is None or i in allowed]
         scored = [s for s in scored if s[1] > 0]
         return sorted(scored, key=lambda s: (-s[1], s[0]))[:n]
 
