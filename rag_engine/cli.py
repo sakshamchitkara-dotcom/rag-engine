@@ -40,7 +40,7 @@ def cmd_ingest(args) -> int:
     with _open(args, args.embedder) as index:
         for target, docs in batches:
             r = index.add_documents(docs, max_chars=args.chunk_size, overlap=args.overlap,
-                                    origin=_origin(target), prune=Path(target).is_dir())
+                                    origin=_origin(target), prune=Path(target).is_dir(), tags=tuple(args.tag))
             print(f"{target}: {len(r.added)} added, {len(r.updated)} updated, {len(r.unchanged)} unchanged, "
                   f"{len(r.removed)} removed -> {r.chunks} chunks written (embedder {index.embedder_name})")
             for source in r.removed:
@@ -73,9 +73,10 @@ def cmd_stats(args) -> int:
     print(f"contents  {st['chunks']} chunks from {st['documents']} documents")
     if st["sources"]:
         width = max(len(d["source"]) for d in st["sources"])
-        print(f"\n{'source'.ljust(width)}  chunks  chars   ingested (UTC)")
+        print(f"\n{'source'.ljust(width)}  chunks   chars  {'ingested (UTC)'.ljust(25)}  tags")
         for d in st["sources"]:
-            print(f"{d['source'].ljust(width)}  {d['chunks']:>6}  {d['chars']:>6}  {d['ingested_at'] or '-'}")
+            print(f"{d['source'].ljust(width)}  {d['chunks']:>6}  {d['chars']:>6}  "
+                  f"{(d['ingested_at'] or '-').ljust(25)}  {','.join(d['tags'])}".rstrip())
     return 0
 
 
@@ -162,6 +163,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("ingest", help="load and index files, folders or URLs")
     s.add_argument("paths", nargs="+", help="file, folder or http(s) URL")
     s.add_argument("--reset", action="store_true", help="clear the index first")
+    s.add_argument("--tag", action="append", default=[],
+                   help="tag the ingested documents (repeatable); filter with `rag ask --tag`")
     s.add_argument("--embedder", default=None, help="'hash[:dim]' (default hash:1024) or 'st:<model>'")
     s.add_argument("--chunk-size", type=int, default=800, help="max characters per chunk (default 800)")
     s.add_argument("--overlap", type=int, default=150, help="overlap characters between chunks (default 150)")

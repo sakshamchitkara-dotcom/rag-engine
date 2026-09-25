@@ -113,6 +113,18 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(len(rechunk.updated), 1)
         ix.close()
 
+    def test_tags_are_normalised_and_replaced_on_reingest(self):
+        ix = Index(self.path)
+        ix.add_documents(DOCS, tags=("API", " docs ", "api"))
+        self.assertEqual({d["tags"] == ["api", "docs"] for d in ix.stats()["sources"]}, {True})
+        r = ix.add_documents(DOCS[:1], tags=("v2",))  # unchanged content, new tags
+        self.assertEqual(r.chunks, 0)
+        tags = {d["source"]: d["tags"] for d in ix.stats()["sources"]}
+        self.assertEqual(tags, {"limits.md": ["v2"], "pets.md": ["api", "docs"]})
+        with self.assertRaises(ValueError):
+            ix.add_documents(DOCS, tags=("a,b",))
+        ix.close()
+
     def test_embedder_is_pinned(self):
         ix = Index(self.path, embedder="hash:128")
         ix.add_documents(DOCS)
