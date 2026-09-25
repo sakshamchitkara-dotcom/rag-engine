@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 from . import __version__
 from .evaluate import DEFAULT_MODES, evaluate, evaluate_answers, format_answer_table, format_table, load_questions
@@ -22,19 +23,25 @@ def _open(args, embedder: str | None = None) -> Index:
     return Index(args.index, embedder=embedder)
 
 
+def _origin(target: str) -> str:
+    return target if target.startswith(("http://", "https://")) else str(Path(target).resolve())
+
+
 def cmd_ingest(args) -> int:
-    docs = []
+    batches = []
     for target in args.paths:
         loaded = load_path(target)
         if not loaded:
             print(f"warning: no supported documents found in {target}", file=sys.stderr)
-        docs.extend(loaded)
+        batches.append((target, loaded))
     if args.reset:
         with _open(args) as index:
             index.reset()
     with _open(args, args.embedder) as index:
-        n = index.add_documents(docs, max_chars=args.chunk_size, overlap=args.overlap)
-        print(f"ingested {len(docs)} documents -> {n} chunks (embedder {index.embedder_name})")
+        for target, docs in batches:
+            r = index.add_documents(docs, max_chars=args.chunk_size, overlap=args.overlap, origin=_origin(target))
+            print(f"{target}: {len(r.added)} added, {len(r.updated)} updated, {len(r.unchanged)} unchanged "
+                  f"-> {r.chunks} chunks written (embedder {index.embedder_name})")
         print(f"index {index.path}: {len(index.chunks)} chunks from {len(index.sources())} documents")
     return 0
 

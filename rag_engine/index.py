@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import threading
 from array import array
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .bm25 import BM25
@@ -31,6 +33,12 @@ CREATE TABLE IF NOT EXISTS chunks (
     vector BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS chunks_source ON chunks(source);
+CREATE TABLE IF NOT EXISTS documents (
+    source TEXT PRIMARY KEY,
+    origin TEXT NOT NULL,       -- the ingest target it came from (folder, file or URL)
+    hash TEXT NOT NULL,         -- sha256 of chunking settings + text: unchanged docs are skipped
+    ingested_at TEXT NOT NULL
+);
 """
 
 
@@ -51,6 +59,18 @@ def rrf(rankings: dict[str, list[int]], k: int = RRF_K) -> list[tuple[int, float
             ranks.setdefault(doc, {})[name] = rank
     ordered = sorted(scores, key=lambda d: (-scores[d], d))
     return [(d, scores[d], ranks[d]) for d in ordered]
+
+
+@dataclass
+class IngestResult:
+    added: list[str] = field(default_factory=list)
+    updated: list[str] = field(default_factory=list)
+    unchanged: list[str] = field(default_factory=list)
+    chunks: int = 0  # chunks written (unchanged documents write none)
+
+
+def content_hash(doc: Document, max_chars: int, overlap: int) -> str:
+    return hashlib.sha256(f"{max_chars}:{overlap}\n{doc.title}\n{doc.text}".encode()).hexdigest()
 
 
 class Index:
@@ -88,26 +108,42 @@ class Index:
     def reset(self) -> None:
         with self.db:
             self.db.execute("DELETE FROM chunks")
+            self.db.execute("DELETE FROM documents")
             self.db.execute("DELETE FROM meta")
         self._invalidate()
 
     def _invalidate(self) -> None:
         self._chunks, self._vectors, self._bm25 = None, [], None
 
-    def add_documents(self, docs: list[Document], *, max_chars: int = 800, overlap: int = 150) -> int:
-        """Chunk, embed and store documents; re-ingesting a source replaces its old chunks."""
+    def add_documents(self, docs: list[Document], *, max_chars: int = 800, overlap: int = 150,
+                      origin: str = "") -> IngestResult:
+        """Chunk, embed and store documents whose content changed since the last ingest.
+
+        A document is identified by its source; re-ingesting it with different text (or
+        chunking settings) replaces its chunks, and identical content is skipped.
+        """
+        stored = dict(self.db.execute("SELECT source, hash FROM documents"))
+        result, changed, hashes = IngestResult(), [], {}
+        for doc in docs:
+            hashes[doc.source] = content_hash(doc, max_chars, overlap)
+            if stored.get(doc.source) == hashes[doc.source]:
+                result.unchanged.append(doc.source)
+            else:
+                (result.updated if doc.source in stored else result.added).append(doc.source)
+                changed.append(doc)
         chunks = [
             c
-            for doc in docs
+            for doc in changed
             for c in chunk_document(doc.text, source=doc.source, title=doc.title,
                                     max_chars=max_chars, overlap=overlap)
         ]
         vectors = self.embedder.embed([c.indexed_text for c in chunks]) if chunks else []
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self.db:
             self.db.execute(
                 "INSERT OR REPLACE INTO meta(key, value) VALUES ('embedder', ?)", (self.embedder_name,)
             )
-            self.db.executemany("DELETE FROM chunks WHERE source = ?", [(d.source,) for d in docs])
+            self.db.executemany("DELETE FROM chunks WHERE source = ?", [(d.source,) for d in changed])
             self.db.executemany(
                 "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
@@ -115,8 +151,14 @@ class Index:
                     for c, v in zip(chunks, vectors)
                 ],
             )
-        self._invalidate()
-        return len(chunks)
+            self.db.executemany(
+                "INSERT OR REPLACE INTO documents(source, origin, hash, ingested_at) VALUES (?, ?, ?, ?)",
+                [(d.source, origin, hashes[d.source], now) for d in changed],
+            )
+        if changed:
+            self._invalidate()
+        result.chunks = len(chunks)
+        return result
 
     def _load(self) -> None:
         with self._lock:
