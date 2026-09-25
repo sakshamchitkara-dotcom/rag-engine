@@ -1,5 +1,8 @@
 """Retrieval and answer evaluation over a labelled question set.
 
+Judged answers (`rag eval --judge`): the answers `rag ask` would give, graded for
+correctness and grounding by Claude, or by a word-overlap heuristic offline.
+
 Retrieval: recall@k, MRR and top-k diversity per retriever, optionally reranked
 ('hybrid+proximity') and/or with Claude multi-query retrieval ('hybrid+multi'). Answers: how often the offline extractive
 answer contains the labelled phrase, and how much of it is padding.
@@ -19,10 +22,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .generate import NO_ANSWER, claude_available, extractive_answer
+from .generate import NO_ANSWER, _fallback_warning, answer, claude_available, claude_complete, extractive_answer
 from .index import MODES, Index
 from .rerank import RERANKERS
 from .rewrite import multi_search, rewrite_queries
+from .text import tokenize
 
 DEFAULT_MODES = (*MODES, *(f"hybrid+{r}" for r in RERANKERS))
 
@@ -165,6 +169,112 @@ def evaluate_answers(index: Index, questions: list[dict], k: int = 5, mode: str 
         on_target = sum(1 <= n <= len(hits) and is_relevant(hits[n - 1].chunk, q) for n in cited)
         results.append(AnswerResult(q["question"], q["contains"].lower() in text.lower(), len(cited), on_target))
     return AnswerReport(mode, results)
+
+
+JUDGE_PROMPT = """You grade answers produced by a retrieval-augmented QA system.
+
+You get a question, the reference fact a correct answer must convey, the numbered sources the system retrieved, and its answer with [n] citations. Decide:
+- correct: the answer conveys the reference fact (wording may differ) and does not contradict it.
+- grounded: every claim in the answer is supported by the source it cites.
+
+Reply with only a JSON object: {"correct": true|false, "grounded": true|false, "reason": "<one short sentence>"}"""
+
+
+@dataclass
+class JudgedAnswer:
+    question: str
+    answer: str
+    correct: bool
+    grounded: bool
+    judge: str  # "claude" or "heuristic"
+    reason: str = ""
+
+
+@dataclass
+class JudgeReport:
+    mode: str
+    answered_by: str  # "claude", "extractive" or "mixed"
+    results: list[JudgedAnswer]
+
+    @property
+    def correct(self) -> float:
+        return sum(r.correct for r in self.results) / len(self.results)
+
+    @property
+    def grounded(self) -> float:
+        return sum(r.grounded for r in self.results) / len(self.results)
+
+    def to_dict(self) -> dict:
+        return {"mode": self.mode, "answered_by": self.answered_by,
+                "judges": sorted({r.judge for r in self.results}),
+                "correct": round(self.correct, 4), "grounded": round(self.grounded, 4),
+                "failures": [{"question": r.question, "answer": r.answer, "correct": r.correct,
+                              "grounded": r.grounded, "reason": r.reason}
+                             for r in self.results if not (r.correct and r.grounded)]}
+
+
+def heuristic_judgement(label: dict, answer_text: str, sources: list[dict]) -> tuple[bool, bool, str]:
+    """(correct, grounded, reason) without an LLM.
+
+    correct: every content word of the labelled phrase appears in the answer.
+    grounded: every claim (the text before a run of [n] citations, or uncited text at
+    the end) shares at least half of its content words with the sources it cites.
+    """
+    words = set(tokenize(answer_text))
+    missing = set(tokenize(label["contains"])) - words
+    if answer_text == NO_ANSWER:
+        return False, True, "no answer"
+    unsupported, start = [], 0
+    # Each claim is the text before a run of citations: "Claim one [1]. Claim two [2][3]."
+    for m in list(re.finditer(r"(?:\[\d+\])+", answer_text)) + [None]:
+        claim = answer_text[start:m.start() if m else None]
+        cited = [int(n) for n in re.findall(r"\d+", m.group(0))] if m else []
+        start = m.end() if m else start
+        own = set(tokenize(claim))
+        cited_words = set().union(*(set(tokenize(sources[n - 1]["text"])) for n in cited if 1 <= n <= len(sources)))
+        if own and len(own & cited_words) < len(own) / 2:
+            unsupported.append(claim.strip())
+    reason = "; ".join(filter(None, [f"missing {sorted(missing)}" if missing else "",
+                                     f"not supported by its citation: {unsupported[0][:80]!r}"
+                                     if unsupported else ""]))
+    return not missing, not unsupported, reason
+
+
+def claude_judgement(question: str, label: dict, answer_text: str, sources: list[dict]) -> tuple[bool, bool, str]:
+    user = (f"Question: {question}\n\nReference fact: {label['contains']}\n\n<sources>\n"
+            + "\n".join(f'<source id="{s["n"]}">{s["text"]}</source>' for s in sources)
+            + f"\n</sources>\n\nAnswer:\n{answer_text}")
+    reply = claude_complete(JUDGE_PROMPT, user)
+    match = re.search(r"\{.*\}", reply, re.DOTALL)
+    verdict = json.loads(match.group(0)) if match else None
+    if not isinstance(verdict, dict) or not {"correct", "grounded"} <= verdict.keys():
+        raise RuntimeError(f"judge reply was not the expected JSON: {reply[:80]!r}")
+    return bool(verdict["correct"]), bool(verdict["grounded"]), str(verdict.get("reason", ""))
+
+
+def judge_answers(index: Index, questions: list[dict], k: int = 5, mode: str = "hybrid",
+                  use_llm: bool = True) -> JudgeReport:
+    """Answer each question the way `rag ask` does (Claude when available, else the
+    extractive fallback) and grade the answer: Claude as judge when available, else
+    heuristic_judgement(). A failed judge call falls back to the heuristic for that
+    question."""
+    parts = parse_mode(mode)
+    llm = use_llm and claude_available()
+    results, modes = [], set()
+    for q in questions:
+        hits = _retrieve(index, q["question"], k, parts)
+        result = answer(q["question"], hits, use_llm=llm)
+        modes.add(result.mode)
+        verdict, judge = None, "heuristic"
+        if llm:
+            try:
+                verdict, judge = claude_judgement(q["question"], q, result.text, result.sources), "claude"
+            except Exception as exc:
+                if _fallback_warning(exc) is None and not isinstance(exc, ValueError):
+                    raise
+        verdict = verdict or heuristic_judgement(q, result.text, result.sources)
+        results.append(JudgedAnswer(q["question"], result.text, *verdict[:2], judge, verdict[2]))
+    return JudgeReport(mode, modes.pop() if len(modes) == 1 else "mixed", results)
 
 
 def format_table(reports: list[ModeReport]) -> str:
