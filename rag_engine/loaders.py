@@ -103,6 +103,23 @@ def pdf_to_text(data: bytes) -> str | None:
     return "\n\n".join(p for p in pages if p)
 
 
+def text_to_markdown(text: str) -> str:
+    """Promote plain-text headings (short standalone lines without end punctuation) to Markdown.
+
+    Leaves text alone if it already has Markdown headings.
+    """
+    if re.search(r"^#{1,6}\s", text, re.MULTILINE):
+        return text
+    out, first = [], True
+    for para in re.split(r"\n\s*\n", text.strip()):
+        para = para.strip()
+        if "\n" not in para and 0 < len(para) <= 70 and para[-1] not in ".,;:!?)":
+            para = ("# " if first else "## ") + para
+        first = False
+        out.append(para)
+    return "\n\n".join(out)
+
+
 def _title_from_markdown(text: str, fallback: str) -> str:
     for line in text.splitlines():
         if line.startswith("# "):
@@ -122,7 +139,8 @@ def _decode(data: bytes, source: str, kind: str) -> Document | None:
     if kind == "html":
         title, text = html_to_text(raw)
         return Document(source, title or _title_from_markdown(text, stem), text)
-    return Document(source, _title_from_markdown(raw, stem), raw)
+    text = text_to_markdown(raw) if kind == "text" and not source.lower().endswith((".md", ".markdown")) else raw
+    return Document(source, _title_from_markdown(text, stem), text)
 
 
 def _kind_for_suffix(suffix: str) -> str:
