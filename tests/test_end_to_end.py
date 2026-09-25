@@ -81,6 +81,19 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("0 chunks from 0 documents", out)
 
+    def test_stats(self):
+        code, out = run("--index", self.index_path, "stats", "--json")
+        self.assertEqual(code, 0)
+        st = json.loads(out)
+        self.assertEqual(st["documents"], 9)
+        self.assertEqual(st["embedder"], "hash:1024")
+        pricing = next(d for d in st["sources"] if d["source"] == "pricing.md")
+        self.assertEqual(pricing["origin"], str(CORPUS))
+        self.assertGreater(pricing["chunks"], 0)
+        self.assertEqual(sum(d["chunks"] for d in st["sources"]), st["chunks"])
+        _, out = run("--index", self.index_path, "stats")
+        self.assertIn("contents  %d chunks from 9 documents" % st["chunks"], out)
+
     def test_ask_json(self):
         code, out = run("--index", self.index_path, "ask", "What is the REST API rate limit?", "--json")
         self.assertEqual(code, 0)

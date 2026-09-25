@@ -220,6 +220,23 @@ class Index:
     def sources(self) -> list[str]:
         return [r[0] for r in self.db.execute("SELECT DISTINCT source FROM chunks ORDER BY source")]
 
+    def stats(self) -> dict:
+        """Index-wide counts plus one row per document, for `rag stats` and /api/health."""
+        rows = self.db.execute(
+            "SELECT c.source, COUNT(*), SUM(LENGTH(c.text)), d.origin, d.ingested_at "
+            "FROM chunks c LEFT JOIN documents d ON d.source = c.source GROUP BY c.source ORDER BY c.source"
+        ).fetchall()
+        docs = [{"source": src, "chunks": n, "chars": chars, "origin": origin, "ingested_at": at}
+                for src, n, chars, origin, at in rows]
+        return {
+            "path": str(self.path),
+            "bytes": self.path.stat().st_size if self.path.exists() else 0,
+            "embedder": self.embedder_name,
+            "documents": len(docs),
+            "chunks": sum(d["chunks"] for d in docs),
+            "sources": docs,
+        }
+
     # -- retrieval -----------------------------------------------------------
 
     def _bm25_ranking(self, query: str, n: int) -> list[tuple[int, float]]:
