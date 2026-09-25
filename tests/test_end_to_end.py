@@ -224,6 +224,43 @@ class ServerTest(unittest.TestCase):
         status, body = self.post({"question": "backups", "llm": False, "tag": "no-such-tag"})
         self.assertEqual((status, body["sources"]), (200, []))
 
+    def stream(self, payload):
+        req = urllib.request.Request(self.base + "/api/ask/stream", data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as resp:
+            self.assertTrue(resp.headers["Content-Type"].startswith("text/event-stream"))
+            raw = resp.read().decode()
+        events = []
+        for block in raw.strip().split("\n\n"):
+            fields = dict(line.split(": ", 1) for line in block.splitlines())
+            events.append((fields["event"], json.loads(fields["data"])))
+        return events
+
+    def test_stream_offline_fallback(self):
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}):
+            events = self.stream({"question": "How often are backups taken?", "k": 3})
+        self.assertEqual([e for e, _ in events], ["sources", "delta", "done"])
+        self.assertEqual(len(events[0][1]), 3)
+        self.assertIn("every 6 hours", events[1][1])
+        self.assertEqual(events[2][1]["mode"], "extractive")
+
+    def test_stream_claude_deltas(self):
+        from tests.test_generate import FakeAnthropic, response
+
+        fake = FakeAnthropic(response(""), deltas=["Backups run ", "every 6 hours [1]."])
+        with mock.patch.dict("sys.modules", {"anthropic": fake}), \
+                mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
+            events = self.stream({"question": "How often are backups taken?"})
+        self.assertEqual([d for e, d in events if e == "delta"], ["Backups run ", "every 6 hours [1]."])
+        self.assertEqual(events[-1], ("done", {"mode": "claude", "warning": None}))
+
+    def test_stream_validation(self):
+        req = urllib.request.Request(self.base + "/api/ask/stream", data=b'{"question": ""}')
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req)
+        with ctx.exception:
+            self.assertEqual(ctx.exception.code, 400)
+
     def test_validation(self):
         self.assertEqual(self.post({"question": ""})[0], 400)
         self.assertEqual(self.post({"question": "x", "k": 0})[0], 400)
