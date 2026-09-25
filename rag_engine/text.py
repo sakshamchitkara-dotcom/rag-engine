@@ -25,7 +25,7 @@ def _stem(token: str) -> str:
     ponytail: crude rule-based stemming; swap for a Porter stemmer if recall on
     morphology-heavy corpora matters.
     """
-    if len(token) <= 4 or not token.isalpha():
+    if len(token) <= 3 or not token.isalpha():
         return token
     for suffix, repl in (("ies", "y"), ("ing", ""), ("ed", ""), ("s", "")):
         if token.endswith(suffix) and len(token) - len(suffix) >= 3:
