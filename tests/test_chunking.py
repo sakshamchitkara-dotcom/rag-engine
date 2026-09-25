@@ -59,6 +59,21 @@ class ChunkTest(unittest.TestCase):
         chunks = chunk_document("word " * 500, source="w.txt", title="W", max_chars=200, overlap=0)
         self.assertTrue(all(len(c.text) <= 200 for c in chunks))
 
+    def test_long_tables_split_between_rows_and_repeat_the_header(self):
+        rows = [f"| plan-{i} | ${i}.00 per seat |" for i in range(40)]
+        table = "| Plan | Price |\n|---|---|\n" + "\n".join(rows)
+        chunks = chunk_document("# Pricing\n\nIntro. Plans below.\n\n" + table, source="p.md", title="P",
+                                max_chars=300, overlap=100)
+        table_chunks = [c for c in chunks if "plan-" in c.text]
+        self.assertGreater(len(table_chunks), 2)
+        seen = []
+        for c in table_chunks:
+            lines = c.text.split("\n\n")[-1].splitlines()
+            self.assertEqual(lines[:2], ["| Plan | Price |", "|---|---|"])
+            seen += lines[2:]
+            self.assertLessEqual(len(c.text), 300)
+        self.assertEqual(seen, rows)  # every row once, whole, in order: no sentence overlap
+
     def test_overlap_must_be_smaller_than_chunk(self):
         with self.assertRaises(ValueError):
             chunk_document("x", source="x", title="x", max_chars=100, overlap=100)
