@@ -12,7 +12,10 @@ re-embeds files whose content changed, and questions can be restricted to docume
 source pattern or tag. Tables survive ingest as Markdown tables (HTML tables included)
 and the offline answerer can answer from a table row. With Claude, questions can be
 rewritten into several search queries (`--multi-query`), and `rag eval --judge` grades
-end-to-end answers for correctness and grounding.
+end-to-end answers for correctness and grounding. `rag chat` and the web chat page keep
+a conversation: follow-ups such as "does the old one keep working?" are rewritten into
+standalone questions (by Claude, or offline by a heuristic), and the chat page links
+each `[n]` citation to its source with the query terms highlighted.
 
 It includes a sample corpus about **Beacon**, a made-up feature-flag service, a
 31-question eval set and a 10-question set of two-part questions, so you can try every
@@ -152,6 +155,7 @@ rewriting on it.
 |---|---|
 | `rag ingest <path-or-url>... [--reset] [--tag NAME]... [--prefix NAME] [--chunk-size 800] [--overlap 150] [--embedder hash:1024]` | Load files, folders (recursively) or `http(s)` URLs, chunk them, embed them and store them. Only new or changed documents are re-embedded, documents deleted from an ingested folder are removed, and unreadable files are skipped with a warning. `--tag` labels the documents of this run (omit it to keep existing tags). `--prefix` stores them as `NAME/<path>`; a document whose source name already belongs to another file is skipped with a warning suggesting it. |
 | `rag ask "<question>" [-k 5] [--mode hybrid\|bm25\|dense] [--rerank none\|proximity\|mmr] [--multi-query] [--source GLOB]... [--tag NAME]... [--no-llm] [--json]` | Retrieve the top-k chunks and answer with `[n]` citations. `*` marks the sources the answer cites. `--multi-query` has Claude rewrite the question into up to 3 extra search queries and fuses their rankings. |
+| `rag chat [same options as ask, except --json]` | Read questions from stdin, one per line. A follow-up is condensed with the earlier questions into a standalone question (shown as `(as: ...)`) before searching. `/reset` starts a new conversation, `/quit` or Ctrl+D exits. |
 | `rag remove <source-or-path>...` | Remove documents by source name (as `rag stats` shows it), folder prefix, or the path of an ingested file or folder. |
 | `rag stats [--json]` | Show the index file, embedder, and each document's chunk count, ingest time and tags. |
 | `rag vacuum` | Compact the index file; SQLite does not shrink it after `remove` or re-ingests on its own. |
@@ -173,8 +177,11 @@ curl -s localhost:8000/api/ask -H 'Content-Type: application/json' \
 
 `POST /api/ask` accepts `question` (required, up to 2000 characters), `k` (1-20), `mode`,
 `rerank` (`none`, `proximity` or `mmr`), `source` and `tag` (a string or a list of strings),
-`multi_query` (true to fuse searches for Claude's rewrites of the question), and `llm`
-(set it to false to skip Claude). Invalid input gets a 400 response with an
+`multi_query` (true to fuse searches for Claude's rewrites of the question), `history`
+(the conversation's earlier questions, oldest first; the last 10 are used), and `llm`
+(set it to false to skip Claude). Responses report the standalone `question` that was
+answered, and each source has `highlights`, the `[start, end)` character spans of query
+terms in its `text`. Invalid input gets a 400 response with an
 `error` message.
 
 `POST /api/ask/stream` takes the same body and answers with Server-Sent Events:
@@ -282,6 +289,15 @@ was sent is resolved with a `replace` event.
   feedback lowered it on the main set, so `--multi-query` needs Claude. The Claude
   rewriting, streaming and judge paths are tested against a fake SDK in the test suite;
   their effect on answer quality has not been measured here.
+- Conversation mode condenses a follow-up into a standalone question. Offline, a
+  heuristic treats a question as a follow-up when it has a referring word ("it", "they",
+  "that", "one"...), starts with "and"/"what about" and similar, or has at most two
+  content words, and then appends the previous question's content words. On
+  `examples/eval_followups.json` (12 follow-ups written for this corpus, so optimistic)
+  hybrid recall@5 goes from 0.667 searched as written to 1.000 and MRR from 0.521 to
+  0.958. It cannot tell a new topic that happens to say "it" from a follow-up; Claude's
+  rewrite handles that but has not been measured here. Answers are generated for the
+  standalone question; earlier answers are not sent to Claude.
 - The heuristic judge only checks word overlap: an extractive answer is grounded by
   construction, and a paraphrased correct answer can be marked wrong.
 - Table support covers Markdown tables and HTML tables. PDF tables are not
@@ -297,7 +313,8 @@ rag --index my.sqlite ask "..."
 ```
 
 To evaluate retrieval on your data, write a JSON list of `{"question", "source", "contains"}`
-objects (see `examples/eval_questions.json`) and run `rag eval --questions your.json`.
+objects (see `examples/eval_questions.json`) and run `rag eval --questions your.json`. Add `"history": ["earlier question", ...]` to evaluate
+follow-ups (see `examples/eval_followups.json`).
 
 ## Development
 

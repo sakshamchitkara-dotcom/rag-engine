@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rag-engine"
-version = "0.3.1"
+version = "0.4.0"
 description = "A small, dependency-free retrieval-augmented generation engine: BM25 + hashed dense vectors, hybrid RRF retrieval, Claude answers with citations."
 readme = "README.md"
 requires-python = ">=3.10"
