@@ -121,6 +121,10 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(r.chunks, 0)
         tags = {d["source"]: d["tags"] for d in ix.stats()["sources"]}
         self.assertEqual(tags, {"limits.md": ["v2"], "pets.md": ["api", "docs"]})
+        edited = Document("pets.md", "Pets", "# Pets\n\nParrots talk.")
+        ix.add_documents(DOCS[:1] + [edited])  # no tags given: keep them, even for changed content
+        tags = {d["source"]: d["tags"] for d in ix.stats()["sources"]}
+        self.assertEqual(tags, {"limits.md": ["v2"], "pets.md": ["api", "docs"]})
         with self.assertRaises(ValueError):
             ix.add_documents(DOCS, tags=("a,b",))
         ix.close()
