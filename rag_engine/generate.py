@@ -16,7 +16,7 @@ from typing import Iterator
 
 from .chunking import is_table
 from .index import Hit
-from .text import split_sentences, tokenize
+from .text import split_sentences, term_spans, tokenize
 
 MODEL = "claude-opus-5-5"
 MIN_SENTENCE_TERMS = 3
@@ -42,7 +42,9 @@ class Answer:
         return {"answer": self.text, "sources": self.sources, "mode": self.mode, "warning": self.warning}
 
 
-def _source_list(hits: list[Hit]) -> list[dict]:
+def _source_list(question: str, hits: list[Hit]) -> list[dict]:
+    """Sources as the API returns them; `highlights` are [start, end) spans of query terms in `text`."""
+    terms = set(tokenize(question))
     return [
         {
             "n": n,
@@ -52,6 +54,7 @@ def _source_list(hits: list[Hit]) -> list[dict]:
             "heading": h.chunk.heading,
             "score": round(h.score, 4),
             "text": h.chunk.text,
+            "highlights": term_spans(h.chunk.text, terms),
         }
         for n, h in enumerate(hits, start=1)
     ]
@@ -252,7 +255,7 @@ def _fallback_warning(exc: Exception) -> str | None:
 
 
 def answer(question: str, hits: list[Hit], *, use_llm: bool = True, model: str = MODEL) -> Answer:
-    sources = _source_list(hits)
+    sources = _source_list(question, hits)
     if not hits:
         return Answer(NO_ANSWER, sources)
     warning = None
@@ -275,7 +278,7 @@ def stream_answer(question: str, hits: list[Hit], *, use_llm: bool = True,
     extractive answer that supersedes the partial one. Without Claude the extractive
     answer arrives as a single delta.
     """
-    yield "sources", _source_list(hits)
+    yield "sources", _source_list(question, hits)
     warning, sent = None, False
     if hits and use_llm and claude_available():
         try:

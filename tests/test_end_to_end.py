@@ -403,6 +403,13 @@ class ServerTest(unittest.TestCase):
         self.assertIn("restored for 30 days", "".join(d for e, d in events if e == "delta"))
         self.assertEqual(events[-1][1]["question"], "For how long? (deleted flag restored)")
 
+    def test_sources_carry_query_term_highlights(self):
+        status, body = self.post({"question": "What is the rate limit?", "k": 1, "llm": False})
+        self.assertEqual(status, 200)
+        src = body["sources"][0]
+        words = {src["text"][a:b].lower() for a, b in src["highlights"]}
+        self.assertEqual(words, {"rate", "limit", "limited"})
+
     def test_history_is_validated(self):
         for history in ("How often?", [1], ["x" * 2001]):
             with self.subTest(history=history):
