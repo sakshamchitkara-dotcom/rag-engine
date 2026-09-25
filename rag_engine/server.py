@@ -82,14 +82,36 @@ document.getElementById("f").addEventListener("submit", async (ev) => {
   const body = el("div", "a", "Thinking..."); card.append(body); log.prepend(card);
   q.value = ""; b.disabled = true;
   try {
-    const r = await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || r.statusText);
-    body.textContent = data.answer;
-    card.append(el("div", "meta", `mode: ${data.mode} - ${data.sources.length} sources`));
-    if (data.warning) card.append(el("div", "warn", data.warning));
+    const r = await fetch("/api/ask/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
+    if (!r.ok) { const data = await r.json(); throw new Error(data.error || r.statusText); }
+    // Server-Sent Events over a POST response: parse "event:/data:" blocks as they arrive.
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = "", text = "", sources = [], done = null;
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buf += dec.decode(chunk.value, { stream: true });
+      let cut;
+      while ((cut = buf.indexOf("\\n\\n")) >= 0) {
+        const block = buf.slice(0, cut); buf = buf.slice(cut + 2);
+        let ev = "message", raw = "";
+        for (const line of block.split("\\n")) {
+          if (line.startsWith("event: ")) ev = line.slice(7);
+          else if (line.startsWith("data: ")) raw += line.slice(6);
+        }
+        const d = JSON.parse(raw);
+        if (ev === "sources") sources = d;
+        else if (ev === "delta") { text += d; body.textContent = text; }
+        else if (ev === "replace") { text = d; body.textContent = text; }
+        else if (ev === "done") done = d;
+        else if (ev === "error") throw new Error(d.error);
+      }
+    }
+    if (!done) throw new Error("the answer stream ended early");
+    card.append(el("div", "meta", `mode: ${done.mode} - ${sources.length} sources`));
+    if (done.warning) card.append(el("div", "warn", done.warning));
     const det = el("details"); det.append(el("summary", null, "Sources"));
-    for (const s of data.sources) {
+    for (const s of sources) {
       const d = el("div", "src"); d.append(el("b", null, `[${s.n}] `), document.createTextNode(`${s.source} - ${s.heading || s.title}`));
       d.append(el("p", null, s.text)); det.append(d);
     }

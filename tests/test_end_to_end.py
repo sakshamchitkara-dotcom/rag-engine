@@ -198,7 +198,9 @@ class ServerTest(unittest.TestCase):
 
     def test_page_and_health(self):
         with urllib.request.urlopen(self.base + "/") as resp:
-            self.assertIn(b"<title>rag-engine</title>", resp.read())
+            page = resp.read()
+        self.assertIn(b"<title>rag-engine</title>", page)
+        self.assertIn(b"/api/ask/stream", page)
         with urllib.request.urlopen(self.base + "/api/health") as resp:
             health = json.loads(resp.read())
         self.assertEqual(health["sources"], 9)
