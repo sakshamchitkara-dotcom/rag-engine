@@ -153,6 +153,19 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn("is not a usable rag index", lines[0])
         self.assertIn("could not fetch URL", lines[1])
 
+    def test_numeric_options_are_validated(self):
+        for argv in (["ask", "x", "-k", "0"], ["ask", "x", "-k", "-2"], ["eval", "--k", "1,a"],
+                     ["serve", "--port", "70000"], ["ingest", str(CORPUS), "--chunk-size", "10"],
+                     ["ingest", str(CORPUS), "--overlap", "-1"]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as err, \
+                    self.assertRaises(SystemExit) as ctx:
+                main(["--index", self.index_path, *argv])
+            self.assertEqual(ctx.exception.code, 2)
+            self.assertIn("error: argument", err.getvalue())
+        code, out = run("--index", self.index_path, "eval", "--questions", str(QUESTIONS), "--k", "3,1",
+                        "--modes", "bm25", "--json")
+        self.assertEqual((code, list(json.loads(out)["retrieval"][0])[1:3]), (0, ["recall@1", "recall@3"]))
+
     def test_eval_quality_floor(self):
         questions = load_questions(QUESTIONS)
         index = Index(self.index_path)

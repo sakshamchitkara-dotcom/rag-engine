@@ -22,6 +22,26 @@ DEFAULT_INDEX = os.environ.get("RAG_INDEX", ".rag/index.sqlite")
 DEFAULT_QUESTIONS = "examples/eval_questions.json"
 
 
+def _int_range(lo: int, hi: int | None = None):
+    """argparse type: an integer in [lo, hi]."""
+    def parse(text: str) -> int:
+        try:
+            n = int(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{text!r} is not an integer") from None
+        if n < lo or (hi is not None and n > hi):
+            raise argparse.ArgumentTypeError(f"{n} is out of range ({lo}..{hi})" if hi is not None
+                                             else f"{n} must be at least {lo}")
+        return n
+    return parse
+
+
+def _cutoffs(text: str) -> tuple[int, ...]:
+    """argparse type for `rag eval --k 1,3,5`."""
+    parse = _int_range(1)
+    return tuple(sorted({parse(k.strip()) for k in text.split(",") if k.strip()})) or parse("")
+
+
 def _open(args, embedder: str | None = None) -> Index:
     return Index(args.index, embedder=embedder)
 
@@ -132,7 +152,7 @@ def _eval(args, index: Index) -> int:
     if not _require_chunks(index):
         return 1
     questions = load_questions(args.questions)
-    ks = tuple(sorted({int(k) for k in args.k.split(",")}))
+    ks = args.k
     modes = args.modes.split(",")
     reports = evaluate(index, questions, ks=ks, modes=modes)
     answers = [evaluate_answers(index, questions, k=5, mode=m) for m in modes]
@@ -181,8 +201,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="prepend NAME/ to the source names of this run, e.g. to ingest two folders that "
                         "both contain README.md")
     s.add_argument("--embedder", default=None, help="'hash[:dim]' (default hash:1024) or 'st:<model>'")
-    s.add_argument("--chunk-size", type=int, default=800, help="max characters per chunk (default 800)")
-    s.add_argument("--overlap", type=int, default=150, help="overlap characters between chunks (default 150)")
+    s.add_argument("--chunk-size", type=_int_range(50), default=800, help="max characters per chunk (default 800)")
+    s.add_argument("--overlap", type=_int_range(0), default=150, help="overlap characters between chunks (default 150)")
     s.set_defaults(func=cmd_ingest)
 
     s = sub.add_parser("remove", help="remove documents from the index")
@@ -196,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("ask", help="answer a question with citations")
     s.add_argument("question")
-    s.add_argument("-k", type=int, default=5, help="chunks to retrieve (default 5)")
+    s.add_argument("-k", type=_int_range(1, 100), default=5, help="chunks to retrieve (default 5)")
     s.add_argument("--mode", choices=MODES, default="hybrid")
     s.add_argument("--rerank", choices=("none", *RERANKERS), default="none",
                    help="rerank the top 20 candidates: proximity (query terms close together) or mmr (diversity)")
@@ -210,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("eval", help="retrieval eval (recall@k, MRR) and extractive answer quality")
     s.add_argument("--questions", default=DEFAULT_QUESTIONS, help=f"question file (default {DEFAULT_QUESTIONS})")
-    s.add_argument("--k", default="1,3,5", help="comma-separated cutoffs (default 1,3,5)")
+    s.add_argument("--k", type=_cutoffs, default=(1, 3, 5), help="comma-separated cutoffs (default 1,3,5)")
     s.add_argument("--modes", default=",".join(DEFAULT_MODES),
                    help="comma-separated retrievers to compare; add +proximity or +mmr to rerank "
                         f"(default {','.join(DEFAULT_MODES)})")
@@ -219,8 +239,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("serve", help="HTTP JSON API + chat page")
     s.add_argument("--host", default="127.0.0.1")
-    s.add_argument("--port", type=int, default=8000)
-    s.add_argument("-k", type=int, default=5)
+    s.add_argument("--port", type=_int_range(0, 65535), default=8000, help="0 picks a free port")
+    s.add_argument("-k", type=_int_range(1, 20), default=5, help="default chunks per answer (default 5)")
     s.set_defaults(func=cmd_serve)
     return p
 
