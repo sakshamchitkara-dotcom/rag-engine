@@ -3,7 +3,8 @@
     GET  /            chat page
     GET  /api/health  index stats
     POST /api/ask     {"question": str, "k": int?, "mode": "hybrid"|"bm25"|"dense"?,
-                       "rerank": "none"|"proximity"|"mmr"?, "llm": bool?}
+                       "rerank": "none"|"proximity"|"mmr"?, "llm": bool?,
+                       "source": glob | [glob]?, "tag": str | [str]?}
 """
 
 from __future__ import annotations
@@ -101,6 +102,36 @@ document.getElementById("f").addEventListener("submit", async (ev) => {
 """
 
 
+def _str_list(value) -> list[str] | None:
+    """Accept "x" or ["x", "y"]; None if the value is neither."""
+    if isinstance(value, str):
+        value = [value]
+    if isinstance(value, list) and all(isinstance(v, str) and v for v in value) and len(value) <= 20:
+        return value
+    return None
+
+
+def parse_ask(req: dict, default_k: int) -> dict | str:
+    """Validate an ask request body; returns the parameters or an error message."""
+    question = req.get("question")
+    k = req.get("k", default_k)
+    mode = req.get("mode", "hybrid")
+    rerank = req.get("rerank", "none")
+    sources, tags = _str_list(req.get("source", [])), _str_list(req.get("tag", []))
+    if not isinstance(question, str) or not question.strip() or len(question) > MAX_QUESTION:
+        return f"'question' must be a non-empty string up to {MAX_QUESTION} chars"
+    if not isinstance(k, int) or isinstance(k, bool) or not 1 <= k <= 20:
+        return "'k' must be an integer between 1 and 20"
+    if mode not in MODES:
+        return f"'mode' must be one of {list(MODES)}"
+    if rerank not in ("none", *RERANKERS):
+        return f"'rerank' must be one of {['none', *RERANKERS]}"
+    if sources is None or tags is None:
+        return "'source' and 'tag' must be a non-empty string or a list of up to 20 of them"
+    return {"question": question, "k": k, "mode": mode, "rerank": rerank, "sources": sources, "tags": tags,
+            "llm": bool(req.get("llm", True))}
+
+
 def make_handler(index: Index, default_k: int = 5):
     class Handler(BaseHTTPRequestHandler):
         server_version = "rag-engine/0.1"
@@ -140,21 +171,12 @@ def make_handler(index: Index, default_k: int = 5):
                 return self._json(400, {"error": "body must be JSON"})
             if not isinstance(req, dict):
                 return self._json(400, {"error": "body must be a JSON object"})
-            question = req.get("question")
-            k = req.get("k", default_k)
-            mode = req.get("mode", "hybrid")
-            rerank = req.get("rerank", "none")
-            use_llm = req.get("llm", True)
-            if not isinstance(question, str) or not question.strip() or len(question) > MAX_QUESTION:
-                return self._json(400, {"error": f"'question' must be a non-empty string up to {MAX_QUESTION} chars"})
-            if not isinstance(k, int) or isinstance(k, bool) or not 1 <= k <= 20:
-                return self._json(400, {"error": "'k' must be an integer between 1 and 20"})
-            if mode not in MODES:
-                return self._json(400, {"error": f"'mode' must be one of {list(MODES)}"})
-            if rerank not in ("none", *RERANKERS):
-                return self._json(400, {"error": f"'rerank' must be one of {['none', *RERANKERS]}"})
-            hits = index.search(question, k=k, mode=mode, rerank=rerank)
-            self._json(200, answer(question, hits, use_llm=bool(use_llm)).to_dict())
+            params = parse_ask(req, default_k)
+            if isinstance(params, str):
+                return self._json(400, {"error": params})
+            hits = index.search(params["question"], k=params["k"], mode=params["mode"], rerank=params["rerank"],
+                                sources=params["sources"], tags=params["tags"])
+            self._json(200, answer(params["question"], hits, use_llm=params["llm"]).to_dict())
 
         def log_message(self, fmt, *args):  # quieter, single-line access log
             print(f"{self.address_string()} {fmt % args}")
