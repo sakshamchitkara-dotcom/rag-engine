@@ -23,6 +23,7 @@ PAGE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rag-engine</title>
+<link rel="icon" href="data:,">
 <style>
   :root { --bg:#f7f7f5; --fg:#1d1d1b; --muted:#6b6b66; --card:#fff; --line:#e3e3de; --accent:#2f5d8a; }
   @media (prefers-color-scheme: dark) {
