@@ -48,3 +48,21 @@ jobs:
         run: pip install -e ".[all]"
       - name: Tests with pypdf and anthropic installed
         run: python -m unittest discover -s tests
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build image
+        run: docker build -t rag-engine:ci .
+      - name: Ingest, ask and serve from the image
+        run: |
+          docker volume create rag-data
+          docker run --rm -v rag-data:/data rag-engine:ci ingest /app/examples/corpus
+          docker run --rm -v rag-data:/data rag-engine:ci ask "What is the REST API rate limit?" | tee ask.log
+          grep -q "300 requests per minute" ask.log
+          docker run -d --name rag -p 8000:8000 -v rag-data:/data rag-engine:ci
+          for i in $(seq 1 30); do curl -sf localhost:8000/api/health && break; sleep 1; done
+          curl -sf localhost:8000/api/ask -d '{"question": "How often are backups taken?", "k": 2}' | tee api.log
+          grep -q "every 6 hours" api.log
+          docker rm -f rag
