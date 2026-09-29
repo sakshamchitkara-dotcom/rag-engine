@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/) (0.x: minor versions may break things).
 
+## [0.4.0] - 2026-09-25
+
+### Added
+
+- Conversation mode: `rag chat` reads questions from stdin and rewrites follow-ups
+  ("Does the old one keep working?") into standalone questions with the earlier
+  questions, using Claude or, offline, a carry-over heuristic.
+- `"history"` in `POST /api/ask` and `/api/ask/stream`; responses report the standalone
+  `question`. The chat page keeps a conversation and has a New button to reset it.
+- `examples/eval_followups.json`: 12 follow-up questions; question files accept a
+  `"history"` list. Offline carry-over lifts hybrid recall@5 on it from 0.667 to 1.000
+  and MRR from 0.521 to 0.958.
+- API sources carry `highlights` (spans of query terms in the text). The chat page links
+  each `[n]` citation to its source (tooltip preview, click to open and scroll), marks
+  the matched terms and flags cited sources.
+
+### Changed
+
+- `rag ask` and `rag chat` share their retrieval options.
+
 ## [0.3.1] - 2026-09-25
 
 ### Fixed
